@@ -20,5 +20,3 @@ Translated vendor UHD notes:
 3. Go to `uhd-4.8.0.0/host` and use `install_uhd.sh`.
 4. The script is meant for x86_64 and ARM Linux (Raspberry Pi, Orange Pi, NanoPC).
 5. With the kernel driver loaded, `sudo uhd_usrp_probe` should find the card.
-
-The large `uhd-*.zip` files (41–44 MB each) and `libpcie.a` binaries are prepared locally at `~/src/m2sdr-myb210/vendor` and `uhd-overlay/`. GitHub's API path used to create this repo does not accept those binaries in one go; copy them from that directory (or from `~/M2SDR/UHD-mode/`) into a clone and `git add` / `git push`, or attach them as a GitHub Release.
