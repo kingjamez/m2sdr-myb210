@@ -1,0 +1,6 @@
+The Linux kernel module in pcie-driver/ is GPL (see MODULE_LICENSE in mymodule.c).
+
+Ettus UHD sources in vendor/uhd-*.zip and the overlay copies of those sources are
+GPL-3.0-or-later; see LICENSE-UHD.md.
+
+arm_libpcie.a and x64_libpcie.a are proprietary vendor binaries; see NOTICE.md.

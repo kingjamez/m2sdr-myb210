@@ -1,0 +1,11 @@
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+Module.symvers
+modules.order
+.tmp_versions/
+*.cmd
+uhd-*/host/build/
+.DS_Store
