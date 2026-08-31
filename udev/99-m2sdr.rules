@@ -1,0 +1,2 @@
+# HamGeek M2SDR character device created by mymodule (DRIVER_NAME "FPGA")
+KERNEL=="FPGA", MODE="0666"

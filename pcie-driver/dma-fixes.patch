@@ -1,0 +1,36 @@
+--- a/mymodule.c.vendor
++++ b/mymodule.c
+@@ -136,9 +136,9 @@
+ 
+   
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
+-	dma_free_coherent(&p->pdev->dev,p->dma_bufs[idx].len * 8,p->dma_bufs[idx].drv_addr,p->dma_bufs[idx].phys);
++	dma_free_coherent(&p->pdev->dev,p->dma_bufs[idx].len * 8,p->dma_bufs[idx].drv_addr,p->dma_bufs[idx].phys << 3);
+ #else
+-	pci_free_consistent(p->pdev,p->dma_bufs[idx].len * 8,p->dma_bufs[idx].drv_addr,p->dma_bufs[idx].phys);
++	pci_free_consistent(p->pdev,p->dma_bufs[idx].len * 8,p->dma_bufs[idx].drv_addr,p->dma_bufs[idx].phys << 3);
+ #endif
+ 
+ 	p->dma_bufs[idx].len = len ;   // in 64 
+@@ -154,7 +154,7 @@
+ //	#else 
+ 	/// p->dma_bufs[idx].drv_addr = dma_alloc_coherent ( &p->pdev->dev , len*8 ,  &(p->dma_bufs[idx].phys) ,GFP_KERNEL );
+ 	
+-	 p->dma_bufs[idx].drv_addr = dma_alloc_coherent ( &p->pdev->dev ,4096 ,  &(p->dma_bufs[idx].phys),GFP_KERNEL );
++	 p->dma_bufs[idx].drv_addr = dma_alloc_coherent ( &p->pdev->dev , len*8 ,  &(p->dma_bufs[idx].phys),GFP_KERNEL );
+ //	#endif 
+ 	
+ 	ptr =p->dma_bufs[idx].drv_addr ;
+@@ -178,10 +178,9 @@
+ 	
+ 		
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
+-
+-dma_free_coherent(&p->pdev->dev,p->dma_bufs[i].len * 8,p->dma_bufs[i].drv_addr,p->dma_bufs[i].phys);
++dma_free_coherent(&p->pdev->dev,p->dma_bufs[i].len * 8,p->dma_bufs[i].drv_addr,p->dma_bufs[i].phys << 3);
+ #else
+-pci_free_consistent(p->pdev,p->dma_bufs[i].len * 8,p->dma_bufs[i].drv_addr,p->dma_bufs[i].phys);
++pci_free_consistent(p->pdev,p->dma_bufs[i].len * 8,p->dma_bufs[i].drv_addr,p->dma_bufs[i].phys << 3);
+ #endif
+ 
+ 
