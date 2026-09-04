@@ -13,6 +13,8 @@ English names used in this repo:
 
 Last vendor update stamp: `last-updated-2026-05-27.txt`.
 
+The UHD zips are ~44 MiB each. If they are not in your clone, copy `uhd-4.8.0.0.zip` (and optionally the driver zip) from the HamGeek after-sales package into this directory, then run `../scripts/install-uhd.sh`.
+
 Translated vendor UHD notes:
 
 1. This is UHD modified for M2SDR. After you install it, USB B210 is not supported.
@@ -20,5 +22,3 @@ Translated vendor UHD notes:
 3. Go to `uhd-4.8.0.0/host` and use `install_uhd.sh`.
 4. The script is meant for x86_64 and ARM Linux (Raspberry Pi, Orange Pi, NanoPC).
 5. With the kernel driver loaded, `sudo uhd_usrp_probe` should find the card.
-
-The large `uhd-*.zip` files (41–44 MB each) and `libpcie.a` binaries are prepared locally at `~/src/m2sdr-myb210/vendor` and `uhd-overlay/`. GitHub's API path used to create this repo does not accept those binaries in one go; copy them from that directory (or from `~/M2SDR/UHD-mode/`) into a clone and `git add` / `git push`, or attach them as a GitHub Release.
