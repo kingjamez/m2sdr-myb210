@@ -6,7 +6,7 @@ This repository contains a mix of licenses and a vendor binary blob.
 
 `MODULE_LICENSE("GPL")`. Author: TQTT Liwei. Shipped by HamGeek as `b210_model_pcie_drv_r25`.
 
-Small DMA-allocation fixes in `dma-fixes.patch` are documented so you can see what changed versus the vendor zip.
+Small DMA-allocation fixes in `dma-fixes.patch` plus the Pi 5 DMA-pool work in `mymodule.c` are documented in `pcie-driver/COMMUNITY-CHANGES.md`.
 
 ## Ettus UHD
 
