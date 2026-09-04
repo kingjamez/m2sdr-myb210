@@ -1,361 +1,238 @@
 # HamGeek M2SDR (UHD name: MyB210)
 
-Community install notes for the HamGeek **M2SDR**: an M.2 2280 PCIe SDR (Xilinx XC7A200 + AD9361) that shows up in UHD as a B210 clone named **MyB210**.
+Community install tree for the HamGeek **M2SDR**: an M.2 2280 PCIe SDR (Xilinx XC7A200 + AD9361) that enumerates in UHD as a B210 clone named **MyB210**.
 
-This is **not** Enjoy Digital LiteX-M2SDR (`10ee:7024` / `m2sdr.ko` / SoapySDR). HamGeek’s card is a vendor-patched UHD B210 over a custom PCIe endpoint.
+This is **not** Enjoy Digital LiteX-M2SDR (`10ee:7024` / `m2sdr.ko` / SoapySDR). HamGeek’s card is a vendor-patched UHD B210 over a custom PCIe endpoint (`10ee:7021`/`7022`/`7024`).
 
-These instructions were reconstructed from a working install on:
+Unofficial. Not affiliated with Ettus/NI or HamGeek. Vendor contact on the after-sales package: `hamgeek@163.com`.
 
-| Item | Value |
-|---|---|
-| Host | Raspberry Pi 5 Model B Rev 1.1 |
-| OS | Debian 13 (trixie) aarch64 |
-| Kernel | `6.12.47+rpt-rpi-2712` (16 KiB pages) |
-| Carrier | 52Pi EP-0180 (ASM1184e PCIe Gen2 x1 switch) |
-| Card | `0001:05:00.0` Xilinx `10ee:7022` (subsystem `10ee:0007`) |
-| UHD | vendor-patched **4.8.0.0** installed to `/usr/local` |
-| What worked | `uhd_find_devices` and `uhd_usrp_probe` see **MyB210** |
-| What did not | sample streaming on this 16 KiB-page Pi 5 kernel |
-
-Vendor after-sales package last updated **2026-05-27**. Driver package is `b210_model_pcie_drv_r25`.
+**Streaming is verified** on a Raspberry Pi 5 (4 KiB pages, community DMA-pool driver, vendor UHD 4.8.0.0): `rx_samples_to_file` wrote 20 000 sc16 samples, SDR++ USRP source opened the card as a B210.
 
 ---
 
-## What you get from the vendor (and from this repo)
+## What you need
 
-Two pieces are required. Stock Ettus UHD and distro `uhd` packages **will not** see this card.
+Two pieces. Stock Ettus UHD and distro `uhd` packages **will not** see this card.
 
-1. **Linux kernel module** `mymodule` (`FPGA_PCIE`) that binds to PCI IDs `10ee:7012`, `10ee:7021`, `10ee:7022`, `10ee:7024` and creates **`/dev/FPGA`**.
-2. **Vendor-patched UHD 4.3–4.8** that links a closed-source static library:
+1. Linux kernel module `mymodule` (`FPGA_PCIE`) → **`/dev/FPGA`**
+2. Vendor-patched UHD 4.3–4.8 linked against a closed-source static library:
    - `x64_libpcie.a` on `x86_64`
-   - `arm_libpcie.a` on `aarch64` / ARM64
+   - `arm_libpcie.a` on `aarch64`
 
-That library talks to `/dev/FPGA` and **replaces USB B210 discovery**. The vendor states that after you install this UHD, **USB B210 devices are no longer supported** by it.
+That library talks to `/dev/FPGA` and **replaces USB B210 discovery**. After you install this UHD into a prefix, **USB B210s are no longer supported** by that prefix.
 
-Architectures the vendor actually shipped: **Linux x86_64 and Linux aarch64** (Raspberry Pi, Orange Pi, NanoPC, etc.). There is no macOS kext/dext and no Darwin `libpcie.a`.
+### Supported hosts
+
+| Host | Status |
+|---|---|
+| Linux **x86_64**, 4 KiB pages, M.2 M-key PCIe slot | Vendor’s primary target. Use this tree. |
+| Linux **aarch64**, 4 KiB pages (Pi 5 `kernel8.img`, many SBCs) | Verified streaming on Pi 5 with the community driver in `pcie-driver/mymodule.c`. |
+| Raspberry Pi 5 default **16 KiB** kernel (`*-rpi-2712`) | Discovery works. **Streaming does not** (`dma buff MMAP failed`). Boot `kernel8.img`. |
+| macOS / Windows | **Not supported.** No kext/dext/INF, and `libpcie.a` is Linux ELF only. |
+
+You need a machine that exposes a general-purpose M.2 **M-key** PCIe slot (not NVMe-only firmware). Blue **DONE** LED (LD10) on the card means the FPGA bitstream is loaded.
 
 ---
 
-## Quick verification (this is what “working” looks like)
+## Quick start (any Linux x86_64 / aarch64 with 4 KiB pages)
 
-PCIe:
+```bash
+git clone https://github.com/kingjamez/m2sdr-myb210.git
+cd m2sdr-myb210
+
+# 1. Kernel headers + build tools
+./scripts/install-deps-debian.sh    # or install-deps-fedora.sh / install-deps-arch.sh
+
+# 2. Driver (DKMS, udev, autoload). Reboot if the script says so — do not rmmod after RX.
+./scripts/install-driver.sh
+
+# 3. Vendor UHD 4.8 into /usr/local  (replaces any UHD already there)
+# If vendor/uhd-4.8.0.0.zip is missing, copy it from the HamGeek after-sales package.
+./scripts/install-uhd.sh
+# Safer if you still use USB B210s:
+#   PREFIX=/opt/m2sdr-uhd ./scripts/install-uhd.sh
+
+# 4. Prove streaming
+./scripts/verify-rx.sh
+```
+
+Success looks like:
 
 ```text
-lspci -nnk | grep -A5 '10ee:7022'
-# Memory controller [0580]: Xilinx Corporation Device [10ee:7022]
+uhd_find_devices  →  name: MyB210  type: b200
+rx_exit=0
+/tmp/m2sdr_rx.dat  is non-zero (20000 sc16 samples ≈ 80000 bytes)
+```
+
+Device args for every UHD tool:
+
+```text
+type=b200
+# or serial=<your serial>   (reference card: 191272)
+```
+
+On a **Raspberry Pi 5**, do the [Pi 5 extra steps](docs/raspberry-pi-5.md) **before** step 2 (4 KiB kernel, 32-bit DMA overlay). Then reboot and run the same driver/UHD/verify commands.
+
+---
+
+## 1. Confirm the card is on the PCIe bus
+
+```bash
+lspci -nnk | grep -A5 -E '10ee:70'
+# Memory controller [0580]: Xilinx Corporation Device [10ee:7022]   # x2 bitstream
 # Kernel driver in use: FPGA_PCIE
 # Kernel modules: mymodule
 ```
 
-Character device:
+| PCI ID | Vendor comment |
+|---|---|
+| `10ee:7021` | 1-lane bitstream |
+| `10ee:7022` | 2-lane (reference card) |
+| `10ee:7024` | 4-lane. **Different product from LiteX-M2SDR**, which also uses `7024`. |
 
-```text
-ls -l /dev/FPGA
-# crw-rw-rw- ... /dev/FPGA
+If nothing appears: reseat, **power-cycle** (a live `pci rescan` is not enough on some carriers), try another M.2 slot.
+
+---
+
+## 2. Page size (do this first on Pi 5)
+
+```bash
+getconf PAGESIZE    # must be 4096 for streaming
 ```
 
-UHD (must be the vendor-patched build, not distro UHD):
+Vendor `arm_libpcie.a` / `x64_libpcie.a` call `mmap()` with **hardcoded 4 KiB** lengths and offsets. Linux requires mmap offsets to be a multiple of `PAGE_SIZE`, so a 16 KiB-page kernel fails with:
 
 ```text
-uhd_config_info --version    # expect 4.8.0.0 (or whichever vendor tree you built)
+dma buff MMAP failed
+Timeout while streaming
+```
+
+Discovery and register loopback still succeed. That is why `uhd_find_devices` is not a streaming test.
+
+---
+
+## 3. Build and load the PCIe driver
+
+This repo’s `pcie-driver/mymodule.c` is the **community driver**: vendor r25 plus DMA fixes that were required for streaming on a Pi 5 (32-bit / 2 GiB inbound window, contiguous pool above the 1 GiB mark so HDMI CMA is left alone). `pcie-driver/mymodule.c.vendor` is the unmodified zip.
+
+```bash
+./scripts/install-driver.sh
+ls -l /dev/FPGA
+```
+
+One-shot (no DKMS):
+
+```bash
+cd pcie-driver
+make
+sudo ./load_module.sh
+```
+
+**Do not `rmmod` / `modprobe -r` `mymodule` after any RX/TX attempt.** That Oopses in `free_node` and can leave the FPGA in D3cold. Reboot to recover. `install-driver.sh` will refuse to unload a live module and tell you to reboot.
+
+---
+
+## 4. Build vendor-patched UHD
+
+Use the matching vendor zip. **4.8.0.0** is what enumerated MyB210 and streamed on the reference host.
+
+```bash
+./scripts/install-uhd.sh
+# or:  PREFIX=/opt/m2sdr-uhd ./scripts/install-uhd.sh
+```
+
+Do **not** overlay these files onto stock Ettus 4.9 / 4.10 / main. The closed-source `libpcie` objects exist only in the vendor 4.3–4.8 trees.
+
+Confirm you are calling **this** UHD:
+
+```bash
+uhd_config_info --version    # 4.8.0.0-0-unknown from /usr/local (or your PREFIX)
 uhd_find_devices
 ```
 
-Successful find:
-
 ```text
-[INFO] [UHD] linux; GNU C++ version ...; UHD_4.8.0.0-0-unknown
---------------------------------------------------
--- UHD Device 0
---------------------------------------------------
 Device Address:
     serial: 191272
     name: MyB210
     type: b200
 ```
 
-`sudo uhd_usrp_probe` should detect a B210, pass register loopback, and (on boards with the GPSDO) print something like `Found an internal GPSDO: ... for PCIEB210`.
-
----
-
-## 1. Confirm the card is on the PCIe bus
-
-Insert the M.2 **2280 M-key** module, then:
-
-```bash
-lspci | grep -i xil
-# expect: ... Xilinx ... 7022   (2-lane bitstream; 7021 = 1-lane, 7024 = 4-lane)
-```
-
-If nothing appears:
-
-- Reseat the card; power-cycle the machine (a live `pci rescan` is not enough on some carriers).
-- Try another M.2 slot.
-- On Raspberry Pi 5, see [docs/raspberry-pi-5.md](docs/raspberry-pi-5.md).
-
-Blue **DONE** LED (LD10) on means the FPGA bitstream is loaded.
-
----
-
-## 2. Install build dependencies
-
-### Debian / Ubuntu / Raspberry Pi OS
-
-```bash
-sudo apt-get update
-sudo apt-get install -y \
-  build-essential dkms linux-headers-$(uname -r) \
-  cmake pkg-config git unzip \
-  libboost-all-dev libusb-1.0-0-dev libudev-dev \
-  python3-dev python3-mako python3-numpy python3-requests python3-setuptools \
-  python3-ruamel.yaml
-```
-
-If `linux-headers-$(uname -r)` is missing, install the headers package that matches `uname -r` (on Raspberry Pi OS that is typically `linux-headers-rpi-2712` and/or `linux-headers-rpi-v8`).
-
-The vendor’s kitchen-sink script is in `scripts/vendor-apt_update.sh`. It installs a lot of GNU Radio / Qt extras you do **not** need just to get UHD talking to the card.
-
-### Fedora / RHEL
-
-```bash
-sudo dnf install -y \
-  gcc gcc-c++ make cmake dkms kernel-devel unzip \
-  boost-devel libusb1-devel systemd-devel \
-  python3-devel python3-mako python3-numpy python3-requests python3-setuptools
-```
-
-### Arch Linux
-
-```bash
-sudo pacman -S --needed \
-  base-devel cmake dkms linux-headers unzip \
-  boost libusb python python-mako python-numpy python-requests python-setuptools
-```
-
----
-
-## 3. Build and load the PCIe driver
-
-From a clone of this repo:
-
-```bash
-cd pcie-driver
-make
-sudo ./load_module.sh          # insmod + mknod /dev/FPGA mode 666
-ls /dev/FPGA
-lspci -nnk | grep -A3 10ee
-```
-
-`load_module.sh` also accepts `unload` / `reload`.
-
-### Survive reboot (DKMS + udev)
-
-This is what was used on the reference Pi 5:
-
-```bash
-sudo mkdir -p /usr/src/m2sdr-0.25
-sudo cp mymodule.c Makefile dkms.conf /usr/src/m2sdr-0.25/
-sudo dkms add -m m2sdr -v 0.25
-sudo dkms build -m m2sdr -v 0.25
-sudo dkms install -m m2sdr -v 0.25
-sudo cp ../udev/99-m2sdr.rules /etc/udev/rules.d/
-sudo cp ../modules-load.d/m2sdr.conf /etc/modules-load.d/
-sudo udevadm control --reload-rules
-sudo modprobe mymodule
-```
-
-Or run `scripts/install-driver.sh`.
-
-### Ubuntu 22.04+ / modern kernels
-
-The vendor note (garbled encoding in the original 说明.txt) is: on Ubuntu 22 and newer, do **not** define `LO_KER` in `mymodule.c`. The copy in this repo already leaves `LO_KER` undefined, so the probe path uses `dma_set_mask_and_coherent(..., DMA_BIT_MASK(32))`.
-
-The module also has `#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0)` / `6,12,0` branches for `vm_flags_set` and `class_create`.
-
-### Optional DMA-allocation fixes
-
-`mymodule.c` in this repo includes two small fixes versus the vendor zip (see `pcie-driver/dma-fixes.patch`):
-
-- `dma_free_coherent` is called with `phys << 3` because the driver stores the bus address shifted down by 3 bits.
-- `dma_alloc_coherent` uses the requested length instead of a hardcoded 4096-byte buffer.
-
-Discovery on the reference host worked with the **unpatched** vendor source via DKMS. Keep the patch if you rebuild from this tree.
-
----
-
-## 4. Build vendor-patched UHD
-
-**Do not** overlay these files onto a random Ettus git snapshot and expect it to work. Use the matching vendor zip (recommended: **4.8.0.0**, which is what enumerated MyB210 here).
-
-```bash
-# From the repo root
-unzip vendor/uhd-4.8.0.0.zip -d /tmp
-cd /tmp/uhd-4.8.0.0/host
-# Extract the *full* zip (host + images + mpm). CMake failed when only host/ was unpacked.
-
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
-make -j"$(nproc)"
-sudo make install
-sudo ldconfig
-```
-
-`host/install_uhd.sh` is the vendor’s equivalent (it also deletes `./build` afterwards and runs `uhd_find_devices` / `uhd_usrp_probe`).
-
-CMake picks the static library from `host/lib/usrp/b200/`:
-
-```cmake
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
-    set(PCIE_LIB_PATH ".../x64_libpcie.a")
-elif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|arm")
-    set(PCIE_LIB_PATH ".../arm_libpcie.a")
-endif()
-link_libraries(${PCIE_LIB_PATH})
-link_libraries(pthread)
-```
-
-If you already have Ettus UHD 4.1 (or any other UHD) in `/usr/local`, this **replaces** it. Put the vendor build in a prefix such as `/opt/m2sdr-uhd` if you still need USB B210s:
-
-```bash
-cmake .. -DCMAKE_INSTALL_PREFIX=/opt/m2sdr-uhd
-# then: export PATH=/opt/m2sdr-uhd/bin:$PATH
-#        export LD_LIBRARY_PATH=/opt/m2sdr-uhd/lib:$LD_LIBRARY_PATH
-```
-
-On the reference host the vendor tree was installed to `/usr/local` and replaced UHD 4.1.
-
-### Which UHD version?
-
-| Zip | Notes |
-|---|---|
-| `vendor/uhd-4.8.0.0.zip` | Built and verified for `uhd_find_devices` / probe |
-| `uhd-4.3.0.0.zip` … `uhd-4.7.0.0.zip` | Same vendor glue; not rebuilt on this host |
-
-You cannot mix this kernel module with **stock** Ettus UHD 4.9 / 4.10 / main. The closed-source `libpcie` objects are only in these vendor trees.
-
 ---
 
 ## 5. Use the radio
 
 ```bash
-sudo uhd_find_devices
-sudo uhd_usrp_probe
-```
-
-GNU Radio, Gqrx, SDR++ etc. will see it only if they load **this** `libuhd.so` (same prefix). A distro `gnuradio` package linked against distro UHD will not.
-
-Example RX (after streaming works on your kernel — see below):
-
-```bash
+uhd_find_devices
+uhd_usrp_probe --args "type=b200"
 /usr/local/lib/uhd/examples/rx_samples_to_file \
-  --args "type=b200" --nsamps 20000 --rate 1e6 --freq 100e6 --gain 40 --file /tmp/m2sdr_rx.dat
+  --args "type=b200" --nsamps 20000 --rate 1e6 --freq 100e6 --gain 40 \
+  --file /tmp/m2sdr_rx.dat
 ```
+
+Or `./scripts/verify-rx.sh`.
+
+### GNU Radio, Gqrx, SDR++
+
+They see the card **only** if they load this `libuhd.so` (same prefix). A distro package linked against distro/`libuhd.so.4.1` will not.
+
+SDR++: rebuild with `-DOPT_BUILD_USRP_SOURCE=ON` against the vendor UHD. In the UI the source is named **USRP**, device like `USRP b200 [<serial>]`. Start at 1–8 MS/s on a Pi 5 that shares PCIe x1 with NVMe.
+
+See [docs/applications.md](docs/applications.md).
 
 ---
 
-## Raspberry Pi 5 extras
+## Raspberry Pi 5
 
-The FPGA BARs are 32-bit. On a Pi 5 the following was required in `/boot/firmware/config.txt`:
+Required extras (32-bit DMA overlay, 4 KiB `kernel8.img`, no CMA relocate):
 
-```ini
-[all]
-dtoverlay=pciex1-compat-pi5,l1ss=off,no-l0s=on,no-mip=off
-dtoverlay=pcie-32bit-dma-pi5
-dtparam=pciex1
-#dtparam=pciex1_gen3
-```
+**[docs/raspberry-pi-5.md](docs/raspberry-pi-5.md)** and `scripts/setup-raspberry-pi5.sh`.
 
-and in `/boot/firmware/cmdline.txt`:
-
-```text
-pci=noaer pcie_aspm=off
-```
-
-See [docs/raspberry-pi-5.md](docs/raspberry-pi-5.md) for the 16 KiB page / streaming issue.
-
----
-
-## macOS
-
-**Not supported with the files the vendor shipped.**
-
-Reasons:
-
-- The driver is a Linux `out-of-tree` kernel module (`mymodule.c`). There is no DriverKit / kext source.
-- The UHD glue is two Linux static libraries (`arm_libpcie.a` is Linux aarch64 ELF; `x64_libpcie.a` is Linux x86_64 ELF). They will not link on Darwin.
-- Consumer Macs do not expose a general-purpose M.2 NVMe slot to third-party PCIe endpoints. Thunderbolt enclosures would still need a macOS driver.
-
-Use Linux (x86_64 or aarch64) on a machine with an M.2 M-key PCIe slot, or a Pi 5 / RK3588-class ARM SBC.
+Do **not** put `cma=64M@1024M` on the cmdline. That moves all CMA to 1 GiB, streaming can work, **HDMI dies**.
 
 ---
 
 ## Known issues
 
-### `dma buff MMAP failed` then `Timeout while streaming`
+| Symptom | Cause | Fix |
+|---|---|
+| `dma buff MMAP failed` | 16 KiB `PAGE_SIZE` | Boot a 4 KiB kernel (`kernel8.img` on Pi 5) |
+| `Timeout while streaming` / `wait_for_ack`, IRQs may still fire | DMA buffers in the Pi 5 64 MiB CMA hole (`0x3b800000–0x3f7fffff`) | Use this community driver (pool at `0x40000000`). Do **not** relocate CMA. |
+| Oops in `free_node`, FPGA D3cold | `rmmod mymodule` after RX | Reboot. Never live-unload. |
+| `No UHD Devices Found` | Distro/Ettus UHD, or `/dev/FPGA` missing | Vendor 4.8 + `mymodule` loaded |
+| Gqrx/GNU Radio silent | Linked to `libuhd.so.4.1.0` | Rebuild against vendor 4.8 |
+| Official `xdma.ko` fails | `10ee:7022` is **not** XDMA | Use `mymodule` |
 
-Seen on Raspberry Pi 5 with **16 KiB** `PAGE_SIZE`. `uhd_find_devices` and register loopback succeed; RX/TX does not.
-
-Cause: `arm_libpcie.a` calls `mmap(..., length=0x1000, offset=0)` and related calls with **hardcoded 4 KiB** lengths/offsets. Linux `mmap` offsets must be a multiple of `PAGE_SIZE`, so 4096 is invalid on a 16 KiB kernel.
-
-Intended workaround (not verified after reboot on the reference host): boot the Pi 5 **4 KiB** kernel:
-
-```ini
-# /boot/firmware/config.txt  [all]
-kernel=kernel8.img
-```
-
-then rebuild the DKMS module against `linux-headers-…-rpi-v8` so `uname -r` matches. Confirm with `getconf PAGESIZE` → `4096`.
-
-x86_64 Linux (4 KiB pages) is what the vendor primarily tested; streaming is expected to work there. Ubuntu 18.04/20.04/22.04/24.04/25.04 are the platforms they ship prebuilt `.ko` files for; this repo always builds from source.
-
-### This UHD build drops USB B210
-
-Per vendor `UHD-mode/instructions.txt`. Keep a separate Ettus UHD prefix if you still use USB B2xx.
-
-### Xilinx XDMA will not bind
-
-`10ee:7022` is the stock XDMA ID, but this FPGA is a custom 4 KiB AXI-Lite endpoint, not XDMA. Official `xdma.ko` fails with `Failed to detect XDMA config BAR`.
+Requested vendor changes for the next software drop: **[VENDOR-FEEDBACK.md](VENDOR-FEEDBACK.md)**.
 
 ---
 
-## Hardware I/O (from the vendor handbook)
+## Hardware I/O
 
-| Port | Function |
-|---|---|
-| TXA / TXB | Transmit A / B |
-| RXA / RXB | Receive A / B (do not exceed 0 dBm) |
-| PPS | PPS input |
-| M.2 | PCIe |
-| 40 MHz out | ~300 mV peak-to-peak |
-| Ext clock in | UHD default 10 MHz |
-| GPS | Active GPS antenna (GPSDO) |
-
-LEDs: LD1 TXB (red), LD2 RXB (green), LD3 RXA (green), LD4 TXA (red), LD10 DONE (blue). LD5–LD9 unused in the handbook.
+See [docs/hardware.md](docs/hardware.md). RX ports: do not exceed 0 dBm. Ext clock default 10 MHz. GPSDO present on the reference board.
 
 ---
 
 ## Repository layout
 
 ```text
-pcie-driver/          Linux kernel module (GPL), DKMS, load script
+pcie-driver/          Community kernel module (GPL) + vendor original
 udev/                 /dev/FPGA mode 666
 modules-load.d/       autoload mymodule
-uhd-overlay/          vendor UHD glue copied out of uhd-4.8.0.0 (including libpcie.a)
-vendor/               original HamGeek zips (driver + UHD 4.3–4.8)
-scripts/              install helpers
-docs/                 Pi 5 notes, hardware notes
+uhd-overlay/          vendor UHD glue (libpcie.a, MyB210 discovery)
+vendor/               original HamGeek zips (driver r25 + UHD 4.3–4.8)
+scripts/              deps, driver, UHD, Pi 5, RX verify
+docs/                 Pi 5, generic Linux, apps, hardware
+VENDOR-FEEDBACK.md    notes for HamGeek’s next revision
 ```
 
-The fastest path is: build `pcie-driver`, unpack `vendor/uhd-4.8.0.0.zip`, run CMake as above.
-
-`uhd-overlay/` is the subset of files that differ from stock Ettus UHD 4.8 (B200 CMake, `b200_impl.cpp` discovery named MyB210, libusb zero-copy hooks, `arm_libpcie.a` / `x64_libpcie.a`). Prefer the full vendor zip.
+`uhd-overlay/` is the subset that differs from stock Ettus UHD 4.8. Prefer building the full `vendor/uhd-4.8.0.0.zip`.
 
 ---
 
 ## Credits and license
 
-- Kernel module author: TQTT Liwei (GPL). Vendor contact in the original package: hamgeek@163.com.
-- UHD host code is Ettus Research UHD (GPL-3.0-or-later) with vendor modifications.
-- `arm_libpcie.a` / `x64_libpcie.a` are **closed-source vendor binaries**. Redistributed here only as part of the after-sales package so other owners of the same hardware can rebuild. See [NOTICE.md](NOTICE.md).
+- Kernel module author: TQTT Liwei (`MODULE_LICENSE("GPL")`).
+- UHD host code: Ettus Research UHD, GPL-3.0-or-later, plus vendor modifications.
+- `arm_libpcie.a` / `x64_libpcie.a` are **closed-source vendor binaries**. Redistributed only so owners of the same hardware can rebuild. See [NOTICE.md](NOTICE.md).
 
-This is an unofficial community reconstruction of one successful Linux install. It is not affiliated with Ettus/NI.
+If you are the vendor and object to redistribution of the blobs, open an issue and they can be replaced with a download-from-vendor step.
