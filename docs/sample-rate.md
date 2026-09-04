@@ -128,7 +128,7 @@ This repo’s `pcie-driver/mymodule.c` carves a 16 MiB pool at **`0x40000000`** 
 
 ### 4. `recv_frame_size=8176`
 
-This is the largest single gain. Default 3088-byte frames are ~20k frames/s at 16 MS/s and collapse. Ettus-sized 8 KiB frames cut that rate in half and made **32 MS/s lossless**.
+This is the largest single gain. Default 3088-byte frames are ~20k frames/s at 16 MS/s and collapse. Ettus-sized 8 KiB frames are what made **16 MS/s last**.
 
 ### 5. `num_recv_frames=64`
 
