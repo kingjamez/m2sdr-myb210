@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Lossless-rate RX check. Default args are what this Pi 5 actually sustains.
+# Sustained-rate RX check. Default is 20 MS/s for 10 s.
 #   ./scripts/benchmark-rate.sh
-#   RATE=44e6 DURATION=4 ./scripts/benchmark-rate.sh
+#   RATE=16e6 DURATION=10 ./scripts/benchmark-rate.sh
 # Never rmmod mymodule after this.
 set -uo pipefail
 export PATH="/usr/local/bin:/opt/m2sdr-uhd/bin:/usr/bin:/bin${PATH:+:$PATH}"
@@ -12,8 +12,8 @@ if [[ "$(getconf PAGESIZE)" != "4096" ]]; then
 fi
 
 ARGS="${ARGS:-type=b200,recv_frame_size=8176,num_recv_frames=64}"
-RATE="${RATE:-40e6}"
-DURATION="${DURATION:-4}"
+RATE="${RATE:-20e6}"
+DURATION="${DURATION:-10}"
 
 EX=""
 for c in \
@@ -36,5 +36,5 @@ sudo "$EX" --args "$ARGS" --rx_rate "$RATE" --duration "$DURATION"
 echo "bench_exit=$?"
 set -e
 echo "===== done $(date -Is) ====="
-echo "Expect 0 dropped / 0 overruns / 0 RX timeouts through 44 MS/s."
+echo "Expect 0 dropped / 0 overruns / 0 RX timeouts through 20 MS/s (use duration 10+)."
 echo "See docs/sample-rate.md."
