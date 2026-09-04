@@ -1,0 +1,230 @@
+diff --git a/source_modules/usrp_source/src/main.cpp b/source_modules/usrp_source/src/main.cpp
+index 650fc20..442ae1f 100644
+--- a/source_modules/usrp_source/src/main.cpp
++++ b/source_modules/usrp_source/src/main.cpp
+@@ -12,6 +12,7 @@
+ #include <uhd/usrp/multi_usrp.hpp>
+ #include <utils/optionlist.h>
+ #include <utils/freq_formatting.h>
++#include <cmath>
+ 
+ #define CONCAT(a, b) ((std::string(a) + b).c_str())
+ 
+@@ -104,8 +105,19 @@ public:
+         selectedSer = serial;
+         devId = devices.keyId(serial);
+ 
+-        // Make device
+-        auto dev = uhd::usrp::multi_usrp::make(devices[devId]);
++        // Keep this sptr alive. Vendor libpcie starts C2H callbacks in make();
++        // destroying a local usrp object while they run aborts in boost::lock_error
++        // (libusb_async_cb / my_c2h_buf_cb).
++        try {
++            if (!dev) {
++                dev = uhd::usrp::multi_usrp::make(devices[devId]);
++            }
++        }
++        catch (const std::exception& e) {
++            flog::error("USRP make() failed: {}", e.what());
++            selectedSer.clear();
++            return;
++        }
+ 
+         // List subdevices
+         char buf[1024];
+@@ -138,15 +150,35 @@ public:
+         selectedChan = chan;
+         chanId = channels.keyId(chan);
+ 
+-        // List samplerates
++        // List samplerates. B210 reports hundreds of clock-derived points from
++        // 31.25 kHz up; keep a short, unique list and skip sub-1 MS/s.
+         samplerates.clear();
++        auto addRate = [&](double f) {
++            if (f < 1e6) { return; }
++            int key = (int)std::lround(f);
++            std::string name = utils::formatFreq(f);
++            if (samplerates.keyExists(key) || samplerates.nameExists(name) || samplerates.valueExists(f)) {
++                return;
++            }
++            try {
++                samplerates.define(key, name, f);
++            }
++            catch (const std::exception&) {}
++        };
+         auto srList = dev->get_rx_rates(chanId);
+         for (const auto& l : srList) {
+-            double step = (l.step() == 0.0) ? 100e3 : l.step();
+-            for (double f = l.start(); f <= l.stop(); f += step) {
+-                samplerates.define(f, utils::formatFreq(f), f);
++            if (l.start() == l.stop()) {
++                addRate(l.start());
++            }
++            else {
++                double step = (l.step() == 0.0) ? 1e6 : l.step();
++                if (step < 1e6) { step = 1e6; }
++                for (double f = l.start(); f <= l.stop(); f += step) {
++                    addRate(f);
++                }
+             }
+         }
++        for (double f : {1e6, 2e6, 4e6}) { addRate(f); }
+ 
+         // List antennas
+         antennas.clear();
+@@ -158,16 +190,10 @@ public:
+         // Get gain range
+         gainRange = dev->get_rx_gain_range(chanId)[0];
+ 
+-        // Get bandwidth ranges
++        // Auto bandwidth only. Enumerating the AD9361 200 kHz–56 MHz range
++        // at 100 kHz steps bloated the combo and is not useful here.
+         bandwidths.clear();
+         bandwidths.define(0, "Auto", 0);
+-        uhd::meta_range_t bwRange = dev->get_rx_bandwidth_range(chanId);
+-        for (const auto& r : bwRange) {
+-            double step = (r.step() == 0.0) ? 100e3 : r.step();
+-            for (double i = r.start(); i <= r.stop(); i += step) {
+-                bandwidths.define((int)i, utils::formatFreq(i), i);
+-            }
+-        }
+ 
+         // Get clock sources
+         clockSources.clear();
+@@ -215,21 +241,21 @@ public:
+     }
+ 
+     void setBandwidth(double bw) {
+-        if (bw > 0.0) {
++        // Auto, or the old combo with only an Auto entry, used an uninitialized
++        // index and often programmed the AD9361 analog LPF to its 200 kHz
++        // minimum. At 1 MS/s that looks like a ~50 dB bowl from center to edge.
++        if (bw <= 0.0) {
++            bw = sampleRate;
++        }
++        try {
+             dev->set_rx_bandwidth(bw, chanId);
+-            return;
++            flog::info("USRP analog RX BW requested {0} Hz, actual {1} Hz",
++                       bw,
++                       dev->get_rx_bandwidth(chanId));
+         }
+-
+-        // If on auto, select the best depending on the samplerate
+-        // Note: Starts at 1 because 0 is the 'Auto' entry.
+-        int bestId;
+-        for (int i = 1; i < bandwidths.size(); i++) {
+-            bestId = i;
+-            if (bandwidths[i] >= sampleRate) { break; }
++        catch (const std::exception& e) {
++            flog::error("set_rx_bandwidth failed: {}", e.what());
+         }
+-
+-        // Set it
+-        dev->set_rx_bandwidth(bandwidths[bestId], chanId);
+     }
+ 
+ private:
+@@ -239,14 +265,16 @@ private:
+         if (_this->firstSelect) {
+             _this->firstSelect = false;
+ 
+-            // List devices
+-            _this->refresh();
+-
+-            // Select device
+-            config.acquire();
+-            _this->selectedSer = config.conf["device"];
+-            config.release();
+-            _this->select(_this->selectedSer);
++            try {
++                _this->refresh();
++                config.acquire();
++                _this->selectedSer = config.conf["device"];
++                config.release();
++                _this->select(_this->selectedSer);
++            }
++            catch (const std::exception& e) {
++                flog::error("USRP select failed: {}", e.what());
++            }
+         }
+ 
+         core::setInputSampleRate(_this->sampleRate);
+@@ -263,14 +291,45 @@ private:
+         if (_this->running) { return; }
+         if (_this->selectedSer.empty()) { return; }
+ 
+-        _this->dev = uhd::usrp::multi_usrp::make(_this->devices[_this->devId]);
++        if (!_this->dev) {
++            try {
++                _this->dev = uhd::usrp::multi_usrp::make(_this->devices[_this->devId]);
++            }
++            catch (const std::exception& e) {
++                flog::error("USRP start make() failed: {}", e.what());
++                return;
++            }
++        }
+ 
++        if (_this->freq <= 0) { _this->freq = 100e6; }
+         _this->dev->set_rx_rate(_this->sampleRate, _this->chanId);
+         _this->dev->set_rx_antenna(_this->antennas.key(_this->antId), _this->chanId);
+         _this->dev->set_rx_gain(_this->gain, _this->chanId);
+         _this->dev->set_rx_freq(_this->freq, _this->chanId);
+-        _this->dev->set_clock_source(_this->clockSources.key(_this->csId));
++        // Do not call set_clock_source() on every start. This board has a GPSDO
++        // UART that has timed out when the clock source is reprogrammed.
++        if (_this->csId > 0 && !_this->clockSources.empty()) {
++            try {
++                _this->dev->set_clock_source(_this->clockSources.key(_this->csId));
++            }
++            catch (const std::exception& e) {
++                flog::error("set_clock_source failed: {}", e.what());
++            }
++        }
+         _this->setBandwidth(_this->bandwidths[_this->bwId]);
++        try {
++            _this->dev->set_rx_dc_offset(true, _this->chanId);
++            _this->dev->set_rx_iq_balance(true, _this->chanId);
++        }
++        catch (const std::exception& e) {
++            flog::warn("DC/IQ auto correction: {}", e.what());
++        }
++        flog::info("USRP start rate={0} freq={1} gain={2} ant={3} bw={4}",
++                   _this->dev->get_rx_rate(_this->chanId),
++                   _this->dev->get_rx_freq(_this->chanId),
++                   _this->dev->get_rx_gain(_this->chanId),
++                   _this->dev->get_rx_antenna(_this->chanId),
++                   _this->dev->get_rx_bandwidth(_this->chanId));
+         
+         uhd::stream_args_t sargs;
+         sargs.channels.clear();
+@@ -298,14 +357,18 @@ private:
+         _this->stream.clearWriteStop();
+         
+         _this->streamer.reset();
+-        _this->dev.reset();
++        // Do not reset `dev` here. Vendor libpcie C2H threads abort if the
++        // usrp object is destroyed while callbacks are still scheduled.
+ 
+         flog::info("USRPSourceModule '{0}': Stop!", _this->name);
+     }
+ 
+     static void tune(double freq, void* ctx) {
+         USRPSourceModule* _this = (USRPSourceModule*)ctx;
+-        if (_this->running) {
++        // First select often sends 0 Hz; applying that to the FPGA is useless
++        // and has raced with vendor libpcie teardown.
++        if (freq <= 0) { return; }
++        if (_this->running && _this->dev) {
+             _this->dev->set_rx_freq(freq, _this->chanId);
+         }
+         _this->freq = freq;
+@@ -461,7 +524,7 @@ private:
+     double sampleRate;
+     SourceManager::SourceHandler handler;
+     bool running = false;
+-    double freq;
++    double freq = 100e6;
+     int devId = 0;
+     int chanId = 0;
+     int srId = 0;
