@@ -17,7 +17,7 @@ uhd_usrp_probe --args "type=b200"
   --rate 1e6 --freq 100e6 --gain 40
 /usr/local/lib/uhd/examples/benchmark_rate \
   --args "type=b200,recv_frame_size=8176,num_recv_frames=64" \
-  --rx_rate 40e6 --duration 4
+  --rx_rate 20e6 --duration 10
 ```
 
 `./scripts/verify-rx.sh` is the same RX test with extra PCIe/dmesg checks.

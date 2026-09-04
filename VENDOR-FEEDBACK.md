@@ -99,7 +99,7 @@ Your UHD still talks to the FPGA like a USB B210. The default `recv_frame_size` 
 | Args | Result |
 |---|---|
 | default ~3088 / 32 | lossless at 8 MS/s; **16 MS/s times out** (~7.7 M of 64 M samples) |
-| `recv_frame_size=8176,num_recv_frames=32` | lossless at **32 MS/s** |
+| `recv_frame_size=8176,num_recv_frames=32` | 4 s burst at 32 MS/s; 8 s times out |
 | `recv_frame_size=8176,num_recv_frames=64` | **16 MS/s 10 s lossless**; 20 MS/s SDR++ OK; 24+ SDR++ dies; 32 MS/s 4 s burst then timeouts |
 | `recv_frame_size=16360` | `ERROR_CODE_BAD_PACKET` / sequence errors |
 | `num_recv_frames=128` | `uhd::assertion_error` |
@@ -126,8 +126,8 @@ On **x86_64 4 KiB** (your usual) **and** on **Pi 5**:
 2. `uhd_find_devices` → MyB210.
 3. `rx_samples_to_file --nsamps 20000 --rate 1e6` → non-zero file, `rx_exit=0`.
 4. Same test at 8 MS/s with default args.
-5. `benchmark_rate --args "type=b200,recv_frame_size=8176,num_recv_frames=64" --rx_rate 16e6` → 0 drops.
-6. Same at 32e6, 40e6, 44e6, 61.44e6. Publish the first rate that drops.
+5. `benchmark_rate --args "type=b200,recv_frame_size=8176,num_recv_frames=64" --rx_rate 16e6` → 0 drops for **10 s**.
+6. Same at 20e6, 24e6, 32e6, 61.44e6 with **duration 10**. Publish the first rate that drops.
 7. HDMI still up after RX (Pi 5).
 8. `dmesg` DMA addresses **not** in `0x3b000000–0x3fffffff` on Pi 5.
 9. Do **not** `rmmod` as a test; if you do, it must not Oops.

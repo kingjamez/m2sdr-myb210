@@ -48,4 +48,4 @@ export LD_LIBRARY_PATH=/opt/m2sdr-uhd/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
 GNU Radio / Gqrx / SDR++ must be built against the same `libuhd.so`.
 
-For high sample rates, pass `recv_frame_size=8176,num_recv_frames=64`. HamGeek’s 3088-byte default dies at 16 MS/s even on a dedicated slot. Pi 5 measured ceiling: [sample-rate.md](sample-rate.md).
+For high sample rates, pass `recv_frame_size=8176,num_recv_frames=64`. HamGeek’s 3088-byte default dies at 16 MS/s even on a dedicated slot. Pi 5 sustained ceiling is **20 MS/s** (16 MS/s conservative): [sample-rate.md](sample-rate.md).

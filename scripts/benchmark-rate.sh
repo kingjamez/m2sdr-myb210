@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Lossless-rate RX check. Default args are what this Pi 5 actually sustains.
 #   ./scripts/benchmark-rate.sh
-#   RATE=44e6 DURATION=4 ./scripts/benchmark-rate.sh
+#   RATE=16e6 DURATION=10 ./scripts/benchmark-rate.sh
 # Never rmmod mymodule after this.
 set -uo pipefail
 export PATH="/usr/local/bin:/opt/m2sdr-uhd/bin:/usr/bin:/bin${PATH:+:$PATH}"
@@ -13,7 +13,7 @@ fi
 
 ARGS="${ARGS:-type=b200,recv_frame_size=8176,num_recv_frames=64}"
 RATE="${RATE:-20e6}"
-DURATION="${DURATION:-4}"
+DURATION="${DURATION:-10}"
 
 EX=""
 for c in \
