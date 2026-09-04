@@ -1,16 +1,19 @@
 diff --git a/source_modules/usrp_source/src/main.cpp b/source_modules/usrp_source/src/main.cpp
-index 650fc20..38a8100 100644
+index 650fc20..8a8d92e 100644
 --- a/source_modules/usrp_source/src/main.cpp
 +++ b/source_modules/usrp_source/src/main.cpp
-@@ -12,6 +12,7 @@
+@@ -12,6 +12,10 @@
  #include <uhd/usrp/multi_usrp.hpp>
  #include <utils/optionlist.h>
  #include <utils/freq_formatting.h>
 +#include <cmath>
++#include <algorithm>
++#include <chrono>
++#include <thread>
  
  #define CONCAT(a, b) ((std::string(a) + b).c_str())
  
-@@ -104,8 +105,19 @@ public:
+@@ -104,8 +108,19 @@ public:
          selectedSer = serial;
          devId = devices.keyId(serial);
  
@@ -32,7 +35,7 @@ index 650fc20..38a8100 100644
  
          // List subdevices
          char buf[1024];
-@@ -138,15 +150,35 @@ public:
+@@ -138,15 +153,35 @@ public:
          selectedChan = chan;
          chanId = channels.keyId(chan);
  
@@ -68,11 +71,11 @@ index 650fc20..38a8100 100644
 +                }
              }
          }
-+        for (double f : {1e6, 2e6, 4e6, 8e6, 16e6, 32e6, 40e6, 44e6}) { addRate(f); }
++        for (double f : {1e6, 2e6, 4e6, 8e6, 16e6, 20e6}) { addRate(f); }
  
          // List antennas
          antennas.clear();
-@@ -158,16 +190,10 @@ public:
+@@ -158,16 +193,10 @@ public:
          // Get gain range
          gainRange = dev->get_rx_gain_range(chanId)[0];
  
@@ -91,7 +94,7 @@ index 650fc20..38a8100 100644
  
          // Get clock sources
          clockSources.clear();
-@@ -215,21 +241,21 @@ public:
+@@ -215,21 +244,21 @@ public:
      }
  
      void setBandwidth(double bw) {
@@ -125,7 +128,7 @@ index 650fc20..38a8100 100644
      }
  
  private:
-@@ -239,14 +265,16 @@ private:
+@@ -239,14 +268,16 @@ private:
          if (_this->firstSelect) {
              _this->firstSelect = false;
  
@@ -150,11 +153,29 @@ index 650fc20..38a8100 100644
          }
  
          core::setInputSampleRate(_this->sampleRate);
-@@ -263,14 +291,46 @@ private:
+@@ -263,28 +294,79 @@ private:
          if (_this->running) { return; }
          if (_this->selectedSer.empty()) { return; }
  
 -        _this->dev = uhd::usrp::multi_usrp::make(_this->devices[_this->devId]);
+-
+-        _this->dev->set_rx_rate(_this->sampleRate, _this->chanId);
+-        _this->dev->set_rx_antenna(_this->antennas.key(_this->antId), _this->chanId);
+-        _this->dev->set_rx_gain(_this->gain, _this->chanId);
+-        _this->dev->set_rx_freq(_this->freq, _this->chanId);
+-        _this->dev->set_clock_source(_this->clockSources.key(_this->csId));
+-        _this->setBandwidth(_this->bandwidths[_this->bwId]);
+-        
+-        uhd::stream_args_t sargs;
+-        sargs.channels.clear();
+-        sargs.channels.push_back(_this->chanId);
+-        sargs.cpu_format = "fc32";
+-        sargs.otw_format = "sc16";
+-        _this->streamer = _this->dev->get_rx_stream(sargs);
+-        _this->streamer->issue_stream_cmd(uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS);
+-        
+-        _this->stream.clearWriteStop();
+-        _this->workerThread = std::thread(&USRPSourceModule::worker, _this);
 +        if (!_this->dev) {
 +            try {
 +                _this->dev = uhd::usrp::multi_usrp::make(
@@ -166,44 +187,92 @@ index 650fc20..38a8100 100644
 +            }
 +        }
  
-+        if (_this->freq <= 0) { _this->freq = 100e6; }
-         _this->dev->set_rx_rate(_this->sampleRate, _this->chanId);
-         _this->dev->set_rx_antenna(_this->antennas.key(_this->antId), _this->chanId);
-         _this->dev->set_rx_gain(_this->gain, _this->chanId);
-         _this->dev->set_rx_freq(_this->freq, _this->chanId);
--        _this->dev->set_clock_source(_this->clockSources.key(_this->csId));
-+        // Do not call set_clock_source() on every start. This board has a GPSDO
-+        // UART that has timed out when the clock source is reprogrammed.
-+        if (_this->csId > 0 && !_this->clockSources.empty()) {
+-        _this->running = true;
+-        flog::info("USRPSourceModule '{0}': Start!", _this->name);
++        try {
++            if (_this->freq <= 0) { _this->freq = 100e6; }
++            _this->dev->set_rx_rate(_this->sampleRate, _this->chanId);
++            _this->dev->set_rx_antenna(_this->antennas.key(_this->antId), _this->chanId);
++            _this->dev->set_rx_gain(_this->gain, _this->chanId);
++            _this->dev->set_rx_freq(_this->freq, _this->chanId);
++            // Do not call set_clock_source() on every start. This board has a GPSDO
++            // UART that has timed out when the clock source is reprogrammed.
++            if (_this->csId > 0 && !_this->clockSources.empty()) {
++                try {
++                    _this->dev->set_clock_source(_this->clockSources.key(_this->csId));
++                }
++                catch (const std::exception& e) {
++                    flog::error("set_clock_source failed: {}", e.what());
++                }
++            }
++            _this->setBandwidth(_this->bandwidths[_this->bwId]);
 +            try {
-+                _this->dev->set_clock_source(_this->clockSources.key(_this->csId));
++                _this->dev->set_rx_dc_offset(true, _this->chanId);
++                _this->dev->set_rx_iq_balance(true, _this->chanId);
 +            }
 +            catch (const std::exception& e) {
-+                flog::error("set_clock_source failed: {}", e.what());
++                flog::warn("DC/IQ auto correction: {}", e.what());
 +            }
-+        }
-         _this->setBandwidth(_this->bandwidths[_this->bwId]);
-+        try {
-+            _this->dev->set_rx_dc_offset(true, _this->chanId);
-+            _this->dev->set_rx_iq_balance(true, _this->chanId);
++            flog::info("USRP start rate={0} freq={1} gain={2} ant={3} bw={4}",
++                       _this->dev->get_rx_rate(_this->chanId),
++                       _this->dev->get_rx_freq(_this->chanId),
++                       _this->dev->get_rx_gain(_this->chanId),
++                       _this->dev->get_rx_antenna(_this->chanId),
++                       _this->dev->get_rx_bandwidth(_this->chanId));
++
++            // Master-clock change leaves stale C2H USB packets. A short settle
++            // plus overflow-drain in worker is required or 8->16 MS/s dies.
++            std::this_thread::sleep_for(std::chrono::milliseconds(50));
++
++            uhd::stream_args_t sargs;
++            sargs.channels.clear();
++            sargs.channels.push_back(_this->chanId);
++            sargs.cpu_format = "fc32";
++            sargs.otw_format = "sc16";
++            _this->streamer = _this->dev->get_rx_stream(sargs);
++
++            size_t mtu = _this->streamer->get_max_num_samps();
++            if (mtu == 0) { mtu = 2040; }
++            _this->recvChunk = (int)std::min((size_t)std::max(1.0, _this->sampleRate / 200.0), mtu * 8);
++            if (_this->recvChunk < (int)mtu) { _this->recvChunk = (int)mtu; }
++
++            _this->stream.clearWriteStop();
++            _this->running = true;
++            _this->workerThread = std::thread(&USRPSourceModule::worker, _this);
++            _this->streamer->issue_stream_cmd(uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS);
++            flog::info("USRPSourceModule '{0}': Start! chunk={1} mtu={2}",
++                       _this->name, _this->recvChunk, (int)mtu);
 +        }
 +        catch (const std::exception& e) {
-+            flog::warn("DC/IQ auto correction: {}", e.what());
++            flog::error("USRP start failed: {}", e.what());
++            _this->running = false;
++            _this->stream.stopWriter();
++            if (_this->workerThread.joinable()) { _this->workerThread.join(); }
++            _this->stream.clearWriteStop();
++            _this->streamer.reset();
 +        }
-+        flog::info("USRP start rate={0} freq={1} gain={2} ant={3} bw={4}",
-+                   _this->dev->get_rx_rate(_this->chanId),
-+                   _this->dev->get_rx_freq(_this->chanId),
-+                   _this->dev->get_rx_gain(_this->chanId),
-+                   _this->dev->get_rx_antenna(_this->chanId),
-+                   _this->dev->get_rx_bandwidth(_this->chanId));
+     }
+ 
+     static void stop(void* ctx) {
+@@ -293,19 +375,30 @@ private:
+         _this->running = false;
          
-         uhd::stream_args_t sargs;
-         sargs.channels.clear();
-@@ -298,14 +358,18 @@ private:
+         _this->stream.stopWriter();
+-        _this->streamer->issue_stream_cmd(uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS);
++        if (_this->streamer) {
++            try {
++                _this->streamer->issue_stream_cmd(uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS);
++            }
++            catch (const std::exception& e) {
++                flog::error("USRP stop stream: {}", e.what());
++            }
++        }
+         if (_this->workerThread.joinable()) { _this->workerThread.join(); }
          _this->stream.clearWriteStop();
-         
+-        
          _this->streamer.reset();
 -        _this->dev.reset();
++        std::this_thread::sleep_for(std::chrono::milliseconds(20));
 +        // Do not reset `dev` here. Vendor libpcie C2H threads abort if the
 +        // usrp object is destroyed while callbacks are still scheduled.
  
@@ -220,13 +289,13 @@ index 650fc20..38a8100 100644
              _this->dev->set_rx_freq(freq, _this->chanId);
          }
          _this->freq = freq;
-@@ -423,6 +487,18 @@ private:
+@@ -423,6 +516,18 @@ private:
          }
      }
  
 +    // HamGeek default recv_frame_size is 3088 bytes and collapses at 16 MS/s.
-+    // Ettus-sized 8176 B frames: 32 buffers are lossless at 32 MS/s; 64 buffers
-+    // are lossless at 40 and 44 MS/s. 50+ still overruns on this transport.
++    // Ettus-sized 8176 B / 64 frames. On this Pi 5, SDR++ is solid through
++    // 20 MS/s; 24+ dies in a few seconds (vendor libpcie C2H).
 +    uhd::device_addr_t xportArgs(const uhd::device_addr_t& base) {
 +        uhd::device_addr_t a = base;
 +        if (!a.has_key("recv_frame_size"))
@@ -239,7 +308,77 @@ index 650fc20..38a8100 100644
      uint32_t floor2(uint32_t val) {
          val |= val >> 1;
          val |= val >> 2;
-@@ -461,7 +537,7 @@ private:
+@@ -432,27 +537,58 @@ private:
+         return val - (val >> 1);
+     }
+ 
++    void kickStream() {
++        if (!streamer) { return; }
++        try {
++            streamer->issue_stream_cmd(uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS);
++            std::this_thread::sleep_for(std::chrono::milliseconds(8));
++            if (running) {
++                streamer->issue_stream_cmd(uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS);
++            }
++        }
++        catch (const std::exception& e) {
++            flog::error("USRP stream kick: {}", e.what());
++        }
++    }
++
+     void worker() {
+-        // TODO: Select a better buffer size that will avoid bad timing
+-        int bufferSize = sampleRate / 200;
++        int overflows = 0;
++        int streak = 0;
+         try {
+-            while (true) {
++            while (running) {
+                 uhd::rx_metadata_t meta;
+-                void* ptr[] = { stream.writeBuf };
+-                uhd::rx_streamer::buffs_type buffers(ptr, 1);
+-                int len = streamer->recv(stream.writeBuf, bufferSize, meta, 1.0);
+-                if (len < 0) { break; }
+-                if (len != bufferSize) {
+-                    printf("%d\n", len);
++                int len = (int)streamer->recv(stream.writeBuf, recvChunk, meta, 0.15);
++                if (!running) { break; }
++                if (meta.error_code == uhd::rx_metadata_t::ERROR_CODE_TIMEOUT) {
++                    streak++;
++                    if (streak == 12) { kickStream(); streak = 0; }
++                    continue;
++                }
++                if (meta.error_code == uhd::rx_metadata_t::ERROR_CODE_OVERFLOW) {
++                    overflows++;
++                    streak++;
++                    if (overflows <= 8 || (overflows % 50) == 0) {
++                        flog::warn("USRP overflow ({0})", overflows);
++                    }
++                    if (streak == 24) { kickStream(); streak = 0; }
++                    continue;
+                 }
+-                if (len) {
+-                    if (!stream.swap(len)) { break; }
++                if (meta.error_code != uhd::rx_metadata_t::ERROR_CODE_NONE) {
++                    flog::error("USRP recv: {}", meta.strerror());
++                    streak++;
++                    if (streak == 12) { kickStream(); streak = 0; }
++                    continue;
+                 }
++                streak = 0;
++                if (len > 0 && !stream.swap(len)) { break; }
+             }
+         }
+         catch (const std::exception& e) {
+             flog::error("Failed to receive samples: {}", e.what());
+         }
++        if (overflows) {
++            flog::info("USRP worker saw {0} overflows", overflows);
++        }
+     }
+ 
+     std::string name;
+@@ -461,7 +597,7 @@ private:
      double sampleRate;
      SourceManager::SourceHandler handler;
      bool running = false;
@@ -248,3 +387,10 @@ index 650fc20..38a8100 100644
      int devId = 0;
      int chanId = 0;
      int srId = 0;
+@@ -486,6 +622,7 @@ private:
+     bool firstSelect = true;
+ 
+     std::thread workerThread;
++    int recvChunk = 2040;
+ 
+ };
