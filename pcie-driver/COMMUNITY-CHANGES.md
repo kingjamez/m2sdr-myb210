@@ -21,6 +21,6 @@ Verified: `rx_samples_to_file` `rx_exit=0`, 80000-byte IQ file, HDMI up, NVMe ro
 | mmap via `dma_addr` PFNs | Userspace must see the same pages the FPGA writes. |
 | Do not free pool slices individually | The whole pool is released on driver teardown. |
 
-**Not done in this module (needs vendor `libpcie.a`):** `mmap` lengths/offsets still assume 4 KiB. Host `PAGE_SIZE` must be 4096.
+**Not done in this module (needs vendor `libpcie.a`):** `mmap` lengths/offsets still assume 4 KiB. Host `PAGE_SIZE` must be 4096. USB-style `recv_frame_size` (default 3088 bytes) is also in `libpcie`/UHD, not this module. Community workaround: pass `recv_frame_size=8176,num_recv_frames=64` — lossless through 44 MS/s on this Pi. See [docs/sample-rate.md](../docs/sample-rate.md).
 
 Do **not** use `cma=64M@1024M` as an alternative. It can place buffers at 1 GiB (RX works) and starves `vc4`, so HDMI dies.

@@ -9,10 +9,15 @@ uhd_config_info --version          # 4.8.0.0-0-unknown
 uhd_find_devices
 uhd_usrp_probe --args "type=b200"
 /usr/local/lib/uhd/examples/rx_samples_to_file \
-  --args "type=b200" --nsamps 20000 --rate 1e6 --freq 100e6 --gain 40 \
+  --args "type=b200,recv_frame_size=8176,num_recv_frames=64" \
+  --nsamps 20000 --rate 1e6 --freq 100e6 --gain 40 \
   --file /tmp/m2sdr_rx.dat
 /usr/local/lib/uhd/examples/rx_ascii_art_dft \
-  --args "type=b200" --rate 1e6 --freq 100e6 --gain 40
+  --args "type=b200,recv_frame_size=8176,num_recv_frames=64" \
+  --rate 1e6 --freq 100e6 --gain 40
+/usr/local/lib/uhd/examples/benchmark_rate \
+  --args "type=b200,recv_frame_size=8176,num_recv_frames=64" \
+  --rx_rate 40e6 --duration 4
 ```
 
 `./scripts/verify-rx.sh` is the same RX test with extra PCIe/dmesg checks.
@@ -39,8 +44,8 @@ sudo cp source_modules/usrp_source/usrp_source.so /usr/lib/sdrpp/plugins/
 
 1. Source: **USRP** (not “UHD”, not “Soapy”).
 2. Device: `USRP b200 [<serial>]`.
-3. Sample rate **1 MS/s** on a Pi 5 that shares PCIe x1 with NVMe. Try 2 MS/s only after 1 MS/s looks clean. 4 MS/s plus a 64k FFT has bus-errored this host.
-4. FFT size **8192** (65536 is too heavy on the Pi 5 GPU).
+3. Sample rate **40 MHz** (or **44 MHz**) on a Pi 5 with the patched plugin. The patch injects `recv_frame_size=8176,num_recv_frames=64`. Without those args, 16 MS/s already times out. Do not pick 50 MHz — the radio clocks it, this host drops. See [sample-rate.md](sample-rate.md).
+4. FFT size **8192** (65536 is too heavy on the Pi 5 GPU). A large FFT plus a high sample rate has bus-errored this host.
 5. Hit Play. Fully quit the app after replacing the plugin; Stop is not enough.
 
 ### Front-end setup (verified 2026-09-04)
@@ -55,6 +60,8 @@ Stock SDR++ “Auto” bandwidth plus a local `multi_usrp` that is destroyed on 
 | GPSDO UART / `fifo ctrl timed out` | `set_clock_source()` on every Play re-inits the GPSTCXO UART | Leave the clock source that `make()` chose (internal) unless the user picks another |
 
 After the analog-BW fix, real signals sit where they should and the waterfall is much flatter. Residual hash from PCIe sharing the ASM1184e with NVMe can still be there; it should no longer look like a 50 dB analog bowl.
+
+Without the 8176/64 transport args, 16 MS/s in SDR++ looks like a dead waterfall even when analog BW is correct. The patch now injects those args.
 
 Do **not** `rmmod mymodule` if SDR++ dies. Reboot.
 
@@ -73,4 +80,18 @@ If you see `libuhd.so.4.1.0`, rebuild GNU Radio’s UHD component (and Gqrx) aga
 
 ## Sample rate
 
-The card is B210-like (AD9361, 2 RX / 2 TX). On a dedicated x86 x1/x2 slot you can try higher rates. On a Pi 5 + ASM1184e sharing the uplink with NVMe, start at 1 MS/s and climb only while the waterfall stays alive.
+The AD9361 will set a master clock of 32, 40, 44, 48, 50, 56, or 61.44 MHz. UHD’s listed rate table still tops out around 16 MS/s — that is the old USB B210 list, not the hardware limit.
+
+On the reference Pi 5 + EP-0180 (NVMe root, Gen2 x1):
+
+| Rate | `recv_frame_size=8176,num_recv_frames=64` |
+|---|---|
+| 16 / 32 / **40 / 44 MS/s** | lossless |
+| 48 / 50 / 61.44 MS/s | clocks, then overruns / timeouts |
+
+HamGeek’s default 3088-byte frames fail at 16 MS/s. `recv_frame_size=16360` causes sequence errors. Full table and the optimizations that got us from 8 MS/s to 44 MS/s: **[sample-rate.md](sample-rate.md)**.
+
+```bash
+./scripts/benchmark-rate.sh              # 40 MS/s
+RATE=44e6 ./scripts/benchmark-rate.sh    # ceiling
+```

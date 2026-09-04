@@ -47,7 +47,8 @@ fi
 
 rm -f /tmp/m2sdr_rx.dat
 set +e
-sudo "$EX" --args "type=b200" --nsamps 20000 --rate 1e6 --freq 100e6 --gain 40 \
+sudo "$EX" --args "type=b200,recv_frame_size=8176,num_recv_frames=64" \
+  --nsamps 20000 --rate 1e6 --freq 100e6 --gain 40 \
   --file /tmp/m2sdr_rx.dat --duration 0.05
 echo "rx_exit=$?"
 set -e

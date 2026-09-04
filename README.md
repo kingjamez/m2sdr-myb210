@@ -6,7 +6,7 @@ This is **not** Enjoy Digital LiteX-M2SDR (`10ee:7024` / `m2sdr.ko` / SoapySDR).
 
 Unofficial. Not affiliated with Ettus/NI or HamGeek. Vendor contact on the after-sales package: `hamgeek@163.com`.
 
-**Streaming is verified** on a Raspberry Pi 5 (4 KiB pages, community DMA-pool driver, vendor UHD 4.8.0.0): `rx_samples_to_file` wrote 20 000 sc16 samples, SDR++ USRP source opened the card as a B210.
+**Streaming is verified** on a Raspberry Pi 5 (4 KiB pages, community DMA-pool driver, vendor UHD 4.8.0.0): `rx_samples_to_file` wrote 20 000 sc16 samples, SDR++ USRP source opened the card as a B210. With Ettus-sized USB frames (`recv_frame_size=8176,num_recv_frames=64`) this host is **lossless through 44 MS/s**. 50 MS/s and 61.44 MS/s clock the AD9361, then drop. Details: [docs/sample-rate.md](docs/sample-rate.md).
 
 ---
 
@@ -67,9 +67,11 @@ rx_exit=0
 Device args for every UHD tool:
 
 ```text
-type=b200
+type=b200,recv_frame_size=8176,num_recv_frames=64
 # or serial=<your serial>   (reference card: 191272)
 ```
+
+HamGeek’s default 3088-byte USB frames collapse at 16 MS/s. The 8176/64 args are lossless at 16, 32, 40, and 44 MS/s on the reference Pi 5. Do not use `recv_frame_size=16360` (sequence errors). See [docs/sample-rate.md](docs/sample-rate.md).
 
 On a **Raspberry Pi 5**, do the [Pi 5 extra steps](docs/raspberry-pi-5.md) **before** step 2 (4 KiB kernel, 32-bit DMA overlay). Then reboot and run the same driver/UHD/verify commands.
 
@@ -165,7 +167,8 @@ Device Address:
 uhd_find_devices
 uhd_usrp_probe --args "type=b200"
 /usr/local/lib/uhd/examples/rx_samples_to_file \
-  --args "type=b200" --nsamps 20000 --rate 1e6 --freq 100e6 --gain 40 \
+  --args "type=b200,recv_frame_size=8176,num_recv_frames=64" \
+  --nsamps 20000 --rate 1e6 --freq 100e6 --gain 40 \
   --file /tmp/m2sdr_rx.dat
 ```
 
@@ -175,7 +178,7 @@ Or `./scripts/verify-rx.sh`.
 
 They see the card **only** if they load this `libuhd.so` (same prefix). A distro package linked against distro/`libuhd.so.4.1` will not.
 
-SDR++: rebuild with `-DOPT_BUILD_USRP_SOURCE=ON` against the vendor UHD, and apply [patches/sdrpp-usrp-source-myb210.patch](patches/sdrpp-usrp-source-myb210.patch). In the UI the source is named **USRP**. On a Pi 5 start at **1 MS/s**, FFT **8192**. Stock SDR++ “Auto” bandwidth programs the AD9361 analog filter to 200 kHz and looks like a 50 dB bowl; selecting USRP without the patch aborts in vendor `libpcie` callbacks.
+SDR++: rebuild with `-DOPT_BUILD_USRP_SOURCE=ON` against the vendor UHD, and apply [patches/sdrpp-usrp-source-myb210.patch](patches/sdrpp-usrp-source-myb210.patch). In the UI the source is named **USRP**. On a Pi 5 use **40 or 44 MS/s**, FFT **8192**. Fully quit after replacing the plugin. Stock SDR++ “Auto” bandwidth programs the AD9361 analog filter to 200 kHz and looks like a 50 dB bowl; selecting USRP without the patch aborts in vendor `libpcie` callbacks.
 
 See [docs/applications.md](docs/applications.md).
 
@@ -187,6 +190,8 @@ Required extras (32-bit DMA overlay, 4 KiB `kernel8.img`, no CMA relocate):
 
 **[docs/raspberry-pi-5.md](docs/raspberry-pi-5.md)** and `scripts/setup-raspberry-pi5.sh`.
 
+Sample-rate work on this host: **[docs/sample-rate.md](docs/sample-rate.md)** (44 MS/s lossless with 8176/64 frames). `./scripts/benchmark-rate.sh` is the 40 MS/s check.
+
 Do **not** put `cma=64M@1024M` on the cmdline. That moves all CMA to 1 GiB, streaming can work, **HDMI dies**.
 
 ---
@@ -194,7 +199,7 @@ Do **not** put `cma=64M@1024M` on the cmdline. That moves all CMA to 1 GiB, stre
 ## Known issues
 
 | Symptom | Cause | Fix |
-|---|---|
+|---|---|---|
 | `dma buff MMAP failed` | 16 KiB `PAGE_SIZE` | Boot a 4 KiB kernel (`kernel8.img` on Pi 5) |
 | `Timeout while streaming` / `wait_for_ack`, IRQs may still fire | DMA buffers in the Pi 5 64 MiB CMA hole (`0x3b800000–0x3f7fffff`) | Use this community driver (pool at `0x40000000`). Do **not** relocate CMA. |
 | Oops in `free_node`, FPGA D3cold | `rmmod mymodule` after RX | Reboot. Never live-unload. |
@@ -203,6 +208,10 @@ Do **not** put `cma=64M@1024M` on the cmdline. That moves all CMA to 1 GiB, stre
 | Official `xdma.ko` fails | `10ee:7022` is **not** XDMA | Use `mymodule` |
 | SDR++ aborts when USRP is selected | Local `multi_usrp` destroyed while `libpcie` C2H callbacks run | Apply `patches/sdrpp-usrp-source-myb210.patch` |
 | Waterfall 50 dB bowl, extra spurs | Analog RX BW left at AD9361 200 kHz min | Same patch: set analog BW = sample rate; enable DC/IQ auto |
+| 16 MS/s timeouts / ~7.7 M of 64 M samples | HamGeek default `recv_frame_size` **3088** bytes | `recv_frame_size=8176,num_recv_frames=64` |
+| 40 MS/s overruns with 32 buffers | Not enough USB-style recv frames | `num_recv_frames=64` (lossless at 40 and 44 MS/s) |
+| Sequence errors / `BAD_PACKET` | `recv_frame_size=16360` | Stay at **8176**, never 16360 on this transport |
+| 48 / 50 / 61.44 MS/s drops | Closed `libpcie` USB emulation, not PCIe average bandwidth | Community ceiling is **44 MS/s**. 50+ is a HamGeek fix |
 
 Requested vendor changes for the next software drop: **[VENDOR-FEEDBACK.md](VENDOR-FEEDBACK.md)**.
 
@@ -222,8 +231,8 @@ udev/                 /dev/FPGA mode 666
 modules-load.d/       autoload mymodule
 uhd-overlay/          vendor UHD glue (libpcie.a, MyB210 discovery)
 vendor/               original HamGeek zips (driver r25 + UHD 4.3–4.8)
-scripts/              deps, driver, UHD, Pi 5, RX verify
-docs/                 Pi 5, generic Linux, apps, hardware
+scripts/              deps, driver, UHD, Pi 5, verify-rx, benchmark-rate
+docs/                 Pi 5, generic Linux, apps, hardware, sample-rate
 patches/              SDR++ USRP source patch for MyB210
 VENDOR-FEEDBACK.md    notes for HamGeek’s next revision
 ```

@@ -12,8 +12,9 @@ Reference hardware that **streamed IQ samples**:
 | UHD | vendor 4.8.0.0 in `/usr/local` |
 | Driver | community `mymodule.c` (`srcversion 65A8816AECE37617225E4AE`) |
 | Verified | `rx_samples_to_file --args type=b200 --nsamps 20000 --rate 1e6` → `rx_exit=0`, 80000-byte file, HDMI stayed up |
+| Lossless RX ceiling | **44 MS/s** with `recv_frame_size=8176,num_recv_frames=64` (40 MS/s conservative). 50+ drops. [sample-rate.md](sample-rate.md) |
 
-The Pi 5 FFC is PCIe **x1**. The M2SDR bitstream advertises x2; the link trains **5 GT/s x1**. That is expected.
+The Pi 5 FFC is PCIe **x1**. The M2SDR bitstream advertises x2; the link trains **5 GT/s x1**. That is expected. Booting the OS from SD (leaving the NVMe idle) does **not** widen the FPGA link.
 
 ---
 
@@ -90,7 +91,17 @@ The switch uplink is the Pi 5 x1 link. NVMe and the SDR can share the switch; th
 - `rmmod` / `modprobe -r` `mymodule` after any RX attempt (Oops + FPGA D3cold). Reboot to pick up a new module.
 - Put `cma=64M@1024M` on cmdline.
 - Use official `xdma.ko` (`Failed to detect XDMA config BAR`).
-- Expect USB3 B210 rates (61.44 MS/s) while sharing x1 with NVMe. Start at 1–8 MS/s.
+- Expect USB3 B210 rates (61.44 MS/s). The AD9361 will clock 61.44 MHz; this host drops samples above **44 MS/s**. Use `recv_frame_size=8176,num_recv_frames=64`. See [sample-rate.md](sample-rate.md).
+
+## 7. Raising the sample rate
+
+Default HamGeek USB frames (3088 bytes) fail at 16 MS/s. Ettus-sized **8176-byte** frames with **64** buffers are lossless at 16, 32, 40, and 44 MS/s on this NVMe boot. 48 / 50 / 61.44 MS/s clock the radio and then overrun.
+
+```text
+type=b200,recv_frame_size=8176,num_recv_frames=64
+```
+
+Full table, what we tried that did not help (SD boot, 16360-byte frames, 128 buffers), and the SDR++ patch: **[sample-rate.md](sample-rate.md)**. Quick check: `RATE=40e6 ./scripts/benchmark-rate.sh`.
 
 ## Revert to 16 KiB pages
 
