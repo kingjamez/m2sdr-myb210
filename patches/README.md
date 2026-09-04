@@ -12,6 +12,7 @@ Fixes verified on a HamGeek MyB210 (vendor UHD 4.8, Pi 5):
 - Do not call `set_clock_source()` on every Play (GPSDO UART timeout).
 - Ignore a bogus 0 Hz tune on first select.
 - Inject `recv_frame_size=8176,num_recv_frames=64` on `make()` (HamGeek default 3088-byte frames die at 16 MS/s).
-- Rate combo includes 1 / 2 / 4 / 8 / 16 / 32 / **40 / 44** MS/s (community lossless ceiling on this Pi).
+- Rate combo includes 1 / 2 / 4 / 8 / 16 / **20** MS/s (SDR++ sustained ceiling on this Pi).
+- Drain overflows and restart the stream instead of freezing.
 
 Fully quit SDR++ after installing `usrp_source.so`. See [docs/applications.md](../docs/applications.md) and [docs/sample-rate.md](../docs/sample-rate.md).

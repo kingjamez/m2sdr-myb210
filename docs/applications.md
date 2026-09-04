@@ -44,7 +44,7 @@ sudo cp source_modules/usrp_source/usrp_source.so /usr/lib/sdrpp/plugins/
 
 1. Source: **USRP** (not “UHD”, not “Soapy”).
 2. Device: `USRP b200 [<serial>]`.
-3. Sample rate **40 MHz** (or **44 MHz**) on a Pi 5 with the patched plugin. The patch injects `recv_frame_size=8176,num_recv_frames=64`. Without those args, 16 MS/s already times out. Do not pick 50 MHz — the radio clocks it, this host drops. See [sample-rate.md](sample-rate.md).
+3. Sample rate **16 MHz** or **20 MHz** on a Pi 5 with the patched plugin. The patch injects `recv_frame_size=8176,num_recv_frames=64`. Without those args, 16 MS/s already times out. 24+ dies in seconds. See [sample-rate.md](sample-rate.md).
 4. FFT size **8192** (65536 is too heavy on the Pi 5 GPU). A large FFT plus a high sample rate has bus-errored this host.
 5. Hit Play. Fully quit the app after replacing the plugin; Stop is not enough.
 
@@ -84,14 +84,16 @@ The AD9361 will set a master clock of 32, 40, 44, 48, 50, 56, or 61.44 MHz. UHD�
 
 On the reference Pi 5 + EP-0180 (NVMe root, Gen2 x1):
 
-| Rate | `recv_frame_size=8176,num_recv_frames=64` |
+| Rate | Result |
 |---|---|
-| 16 / 32 / **40 / 44 MS/s** | lossless |
-| 48 / 50 / 61.44 MS/s | clocks, then overruns / timeouts |
+| **16 / 20 MS/s** | sustained (SDR++ and 8–10 s UHD) |
+| 24 MS/s | 8 s UHD burst OK; **SDR++ dies** |
+| 32–44 MS/s | 4 s UHD burst only; then timeouts |
+| 48 / 50 / 61.44 MS/s | clocks, then overruns |
 
-HamGeek’s default 3088-byte frames fail at 16 MS/s. `recv_frame_size=16360` causes sequence errors. Full table and the optimizations that got us from 8 MS/s to 44 MS/s: **[sample-rate.md](sample-rate.md)**.
+HamGeek’s default 3088-byte frames fail at 16 MS/s. `recv_frame_size=16360` causes sequence errors. Full table: **[sample-rate.md](sample-rate.md)**.
 
 ```bash
-./scripts/benchmark-rate.sh              # 40 MS/s
-RATE=44e6 ./scripts/benchmark-rate.sh    # ceiling
+./scripts/benchmark-rate.sh              # 20 MS/s, use duration 10+
+RATE=16e6 ./scripts/benchmark-rate.sh    # conservative
 ```

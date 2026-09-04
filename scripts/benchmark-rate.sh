@@ -12,7 +12,7 @@ if [[ "$(getconf PAGESIZE)" != "4096" ]]; then
 fi
 
 ARGS="${ARGS:-type=b200,recv_frame_size=8176,num_recv_frames=64}"
-RATE="${RATE:-40e6}"
+RATE="${RATE:-20e6}"
 DURATION="${DURATION:-4}"
 
 EX=""
@@ -36,5 +36,5 @@ sudo "$EX" --args "$ARGS" --rx_rate "$RATE" --duration "$DURATION"
 echo "bench_exit=$?"
 set -e
 echo "===== done $(date -Is) ====="
-echo "Expect 0 dropped / 0 overruns / 0 RX timeouts through 44 MS/s."
+echo "Expect 0 dropped / 0 overruns / 0 RX timeouts through 20 MS/s (use duration 10+)."
 echo "See docs/sample-rate.md."

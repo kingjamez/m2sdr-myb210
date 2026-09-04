@@ -1,17 +1,17 @@
 # Sample rate on Raspberry Pi 5
 
-How to get the highest **lossless** RX rate on the reference host (Pi 5 + 52Pi EP-0180 + NVMe root + community `mymodule` + vendor UHD 4.8). Measured 2026-09-04 with `benchmark_rate`, sc16, 4-second runs.
+How to get the highest **usable** RX rate on the reference host (Pi 5 + 52Pi EP-0180 + NVMe root + community `mymodule` + vendor UHD 4.8).
 
 The AD9361 will clock any of 32 / 40 / 44 / 48 / 50 / 56 / 61.44 MHz. That is not the limit. The limit is vendor `libpcie` talking to the FPGA like a USB B210.
 
-**Community lossless ceiling on this Pi: 44 MS/s.**  
-**50 MS/s and 61.44 MS/s clock, then drop samples.** Those need HamGeek.
+**Sustained ceiling (SDR++ and long UHD runs): 20 MS/s.**  
+**16 MS/s is the rock-solid daily rate.** 24+ dies in a few seconds. 32–44 MS/s can look lossless for a **4 s** `benchmark_rate` and then fall over — those 4 s numbers are bursts, not a ceiling. 50+ needs HamGeek.
 
 ---
 
 ## Device args (the one change that mattered)
 
-HamGeek’s default USB frame is **3088 bytes** (`24*32*4+16`). Ettus B210s use ~**8176**. On this transport, 3088 bytes dies at 16 MS/s. 8176 bytes is lossless at 32 MS/s (32 buffers) and at 40–44 MS/s (64 buffers).
+HamGeek’s default USB frame is **3088 bytes** (`24*32*4+16`). Ettus B210s use ~**8176**. On this transport, 3088 bytes dies at 16 MS/s. 8176/64 is what makes **16 and 20 MS/s** last. 4-second runs at 32–44 MS/s with the same args are not sustainable.
 
 Use this on **every** UHD tool, including SDR++:
 
@@ -22,15 +22,15 @@ type=b200,recv_frame_size=8176,num_recv_frames=64
 ```bash
 /usr/local/lib/uhd/examples/benchmark_rate \
   --args "type=b200,recv_frame_size=8176,num_recv_frames=64" \
-  --rx_rate 40e6 --duration 4
+  --rx_rate 20e6 --duration 10
 
 /usr/local/lib/uhd/examples/rx_samples_to_file \
   --args "type=b200,recv_frame_size=8176,num_recv_frames=64" \
-  --rate 40e6 --freq 100e6 --gain 40 --nsamps 0 --duration 4 \
-  --file /tmp/m2sdr_40msps.dat
+  --rate 20e6 --freq 100e6 --gain 40 --nsamps 0 --duration 10 \
+  --file /tmp/m2sdr_20msps.dat
 ```
 
-Or `./scripts/benchmark-rate.sh` (`RATE=44e6` to try the ceiling).
+Or `./scripts/benchmark-rate.sh` (`RATE=16e6` for the conservative check). Use `--duration 10` or more; 4 s hides the 32 MS/s collapse.
 
 Do **not** use `recv_frame_size=16360` (Ettus `B200_USB_DATA_MAX_RECV_FRAME_SIZE`). On this card it produces `ERROR_CODE_BAD_PACKET` and sequence errors. Do **not** use `num_recv_frames=128`; UHD threw `uhd::assertion_error`.
 
@@ -42,6 +42,21 @@ UHD’s `get_rx_rates()` list still tops out around 16 MS/s (USB-era table). Ign
 
 NVMe root, FPGA trained **PCIe Gen2 5 GT/s x1** (bitstream advertises x2; the Pi 5 FFC and the ASM1184e uplink are x1). IQ is sc16 = 4 bytes/sample.
 
+**Longer runs (what you can actually use):**
+
+| Rate | Tool | Args | Duration | Result |
+|---|---|---|---|---|
+| 16 MS/s | `benchmark_rate` | 8176 / 64 | 10 s | lossless 160 M |
+| 20 MS/s | `benchmark_rate` | 8176 / 64 | 8 s | lossless 160 M |
+| 20 MS/s | **SDR++** | patched plugin | minutes | **usable ceiling** |
+| 24 MS/s | `benchmark_rate` | 8176 / 64 | 8 s | lossless 192 M |
+| 24 MS/s | **SDR++** | patched plugin | seconds | **dies** (DSP + `libpcie`) |
+| 32 MS/s | `benchmark_rate` | 8176 / 32 | 8 s | 63 M of 256 M, 57 timeouts |
+| 32 MS/s | `benchmark_rate` | 8176 / 64 | 8 s | 256 M, then later runs time out |
+| 32 MS/s | **SDR++** | patched plugin | ~4 s | starts, then dies |
+
+4-second `benchmark_rate` bursts (kept for history; **not** the ceiling):
+
 | Rate | Args | Clock | Received / expected (4 s) | Drops | Overruns | RX timeouts | Verdict |
 |---|---|---|---|---|---|---|---|
 | 8 MS/s | HamGeek default (~3088 / 32) | 8 MHz | clean | 0 | 0 | 0 | OK, too slow to bother |
@@ -51,8 +66,8 @@ NVMe root, FPGA trained **PCIe Gen2 5 GT/s x1** (bitstream advertises x2; the Pi
 | 32 MS/s | **8176 / 32** | 32 MHz | 128.1 M | 0 | 0 | 0 | lossless |
 | 32 MS/s | 16360 / 32 | 32 MHz | 128.2 M | 330 | 0 | 0 | 330 sequence errors |
 | 40 MS/s | 8176 / 32 | 40 MHz | 77.7 M / 160 M | 142 k | 1 | 18 | fail |
-| **40 MS/s** | **8176 / 64** | **40 MHz** | **160.0 M** | **0** | **0** | **0** | **lossless** |
-| **44 MS/s** | **8176 / 64** | **44 MHz** | **177.0 M** | **0** | **0** | **0** | **lossless (ceiling)** |
+| 40 MS/s | 8176 / 64 | 40 MHz | 160.0 M | 0 | 0 | 0 | 4 s burst only |
+| 44 MS/s | 8176 / 64 | 44 MHz | 177.0 M | 0 | 0 | 0 | 4 s burst only |
 | 48 MS/s | 8176 / 64 | 48 MHz | 92.1 M / 192 M | 527 k | 3 | 18 | fail |
 | 50 MS/s | 8176 / 32 or /64 | 50 MHz | 112.9 M / 200 M (at /64) | 516 k | 4 | 16 | fail |
 | 61.44 MS/s | 8176 / 32 | 61.44 MHz | 70.3 M / 246 M | 0 counted | 0 | 26 | fail (timeouts) |
@@ -78,7 +93,7 @@ Average link bandwidth is enough for 61.44. The stall is USB-style frame rate an
 
 ## Optimizations that raised the usable rate
 
-Apply these in order. 1–3 are required to stream at all. 4–5 are what moved the ceiling from 8 MS/s to 44 MS/s. 6–10 are quality / crash fixes, not throughput.
+Apply these in order. 1–3 are required to stream at all. 4–5 are what moved the ceiling from 8 MS/s to **20 MS/s sustained**. 6–10 are quality / crash fixes, not throughput.
 
 ### 1. 4 KiB pages (`kernel8.img`)
 
@@ -117,7 +132,7 @@ This is the largest single gain. Default 3088-byte frames are ~20k frames/s at 1
 
 ### 5. `num_recv_frames=64`
 
-32 buffers are enough through 32 MS/s. 40 MS/s with 32 buffers overruns; 64 buffers are lossless at 40 and 44 MS/s. 128 buffers assert. Stay at 64.
+32 buffers are enough for short 16–32 MS/s bursts. **64 buffers** are what 16–20 MS/s need to last. 128 buffers assert. Stay at 64.
 
 ### 6. Analog RX bandwidth = sample rate
 
@@ -159,10 +174,11 @@ Vendor `libpcie` starts C2H callbacks in `multi_usrp::make()`. Destroying a loca
 Rebuild with `-DOPT_BUILD_USRP_SOURCE=ON` against vendor UHD 4.8, apply [patches/sdrpp-usrp-source-myb210.patch](../patches/sdrpp-usrp-source-myb210.patch). The patch:
 
 - injects `recv_frame_size=8176,num_recv_frames=64` on `make()`
-- lists 1 / 2 / 4 / 8 / 16 / 32 / **40 / 44** MS/s
+- lists 1 / 2 / 4 / 8 / 16 / **20** MS/s
 - analog BW = sample rate, DC/IQ auto, keep `usrp` alive, skip GPSDO poke
+- drain overflows / kick the stream instead of freezing
 
-Source name in the UI is **USRP**. Use **40 MHz** or **44 MHz**, not 50. Fully quit after installing the `.so`.
+Source name in the UI is **USRP**. Use **16 or 20 MHz**. Fully quit after installing the `.so`.
 
 ---
 
@@ -178,4 +194,4 @@ These are not community-tunable. See [VENDOR-FEEDBACK.md](../VENDOR-FEEDBACK.md)
 - FPGA x2 on a carrier that actually has two lanes to the card (this HAT will not).
 - Gen3: FPGA max_link_speed is 5 GT/s; a bitstream change would be required.
 
-Until then, treat **44 MS/s** as the Pi 5 + EP-0180 number, **40 MS/s** as the conservative daily rate.
+Until then, treat **20 MS/s** as the Pi 5 + EP-0180 **SDR++** number and **16 MS/s** as the conservative daily rate. 32–44 MS/s 4-second UHD bursts are not a product claim.
