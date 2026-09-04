@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/pcie-driver"
-VER=0.25
+VER=0.26
 
 if [[ ! -d /lib/modules/$(uname -r)/build ]]; then
   echo "No kernel build dir for $(uname -r)." >&2
@@ -17,7 +17,10 @@ fi
 sudo mkdir -p "/usr/src/m2sdr-${VER}"
 sudo cp "$SRC/mymodule.c" "$SRC/Makefile" "$SRC/dkms.conf" "/usr/src/m2sdr-${VER}/"
 
-if dkms status -m m2sdr -v "$VER" 2>/dev/null | grep -q installed; then
+LIVE=0
+lsmod | grep -q '^mymodule' && LIVE=1
+
+if [[ "$LIVE" -eq 0 ]] && dkms status -m m2sdr -v "$VER" 2>/dev/null | grep -q installed; then
   sudo dkms remove -m m2sdr -v "$VER" --all || true
 fi
 sudo dkms add -m m2sdr -v "$VER" || true
@@ -29,12 +32,15 @@ sudo cp "$ROOT/modules-load.d/m2sdr.conf" /etc/modules-load.d/
 sudo udevadm control --reload-rules
 sudo udevadm trigger || true
 
-sudo modprobe -r mymodule 2>/dev/null || true
-sudo modprobe mymodule
-
-if [[ ! -e /dev/FPGA ]]; then
-  echo "/dev/FPGA missing after modprobe; falling back to load_module.sh" >&2
-  sudo "$SRC/load_module.sh" reload
+if lsmod | grep -q '^mymodule'; then
+  echo "mymodule is already loaded. Not unloading (rmmod after RX Oopses the FPGA)."
+  echo "Reboot to pick up the newly installed module."
+else
+  sudo modprobe mymodule
+  if [[ ! -e /dev/FPGA ]]; then
+    echo "/dev/FPGA missing after modprobe; falling back to load_module.sh" >&2
+    sudo "$SRC/load_module.sh" load
+  fi
 fi
 
 echo "----"

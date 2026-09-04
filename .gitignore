@@ -7,5 +7,8 @@ Module.symvers
 modules.order
 .tmp_versions/
 *.cmd
+*.bak
+*.bak.*
+mymodule.c.bak*
 uhd-*/host/build/
 .DS_Store

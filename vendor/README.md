@@ -13,6 +13,8 @@ English names used in this repo:
 
 Last vendor update stamp: `last-updated-2026-05-27.txt`.
 
+The UHD zips are ~44 MiB each. If they are not in your clone, copy `uhd-4.8.0.0.zip` (and optionally the driver zip) from the HamGeek after-sales package into this directory, then run `../scripts/install-uhd.sh`.
+
 Translated vendor UHD notes:
 
 1. This is UHD modified for M2SDR. After you install it, USB B210 is not supported.

@@ -22,6 +22,8 @@ function load(){
 }
 
 function unload() {
+    echo "WARNING: rmmod $module after RX/TX can Oops and D3cold the FPGA." >&2
+    echo "Prefer a reboot. Continuing unload anyway." >&2
     rm -f /dev/${device}
     rmmod $module || exit 1
 }

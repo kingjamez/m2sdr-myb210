@@ -14,6 +14,9 @@
 #include <linux/sched.h>
 #include <linux/poll.h>
 #include <linux/mm.h>
+#include <linux/mmzone.h>
+#include <linux/vmalloc.h>
+#include <linux/gfp.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 #include <linux/serial.h>
@@ -50,6 +53,7 @@
 #include <linux/uaccess.h>
 #include <linux/version.h>
 #include <linux/device.h>
+#include <linux/dma-mapping.h>
   
 
  
@@ -85,7 +89,8 @@ static struct cdev my_device;
 struct az_dmabuf_nfo {
     void* drv_addr          ; 
     dma_addr_t   phys       ;
-    int len    ; 
+    int len    ;
+    u8 coherent; /* 1 = dma_alloc_coherent, 0 = dma_alloc_noncoherent */
 };
 
 
@@ -126,46 +131,352 @@ b31..24 :  buf_idx
 b23...0 :  actual_len to transfer
 */ 
 MODULE_DEVICE_TABLE(pci, az_ids);
- 
+
+/* Pi 5: 2 GiB PCIe inbound window, 64 MiB CMA hole at 0x3b800000. */
+#define M2SDR_DMA_WIN_END   0x80000000ULL
+#define M2SDR_CMA_HOLE_LO   0x3b000000ULL
+#define M2SDR_CMA_HOLE_HI   0x40000000ULL
+#define M2SDR_HOLD_MAX      96
+/* Carve DMA from System RAM at 1 GiB so we never touch default CMA (HDMI). */
+#define M2SDR_POOL_SIZE     (16u << 20)
+#define M2SDR_POOL_PHYS_LO  0x40000000ULL
+#define M2SDR_POOL_PHYS_HI  0x78000000ULL
+
+static void *m2sdr_cma_sink;
+static dma_addr_t m2sdr_cma_sink_dma;
+static size_t m2sdr_cma_sink_sz;
+static void *m2sdr_hold_va[M2SDR_HOLD_MAX];
+static dma_addr_t m2sdr_hold_dma[M2SDR_HOLD_MAX];
+static size_t m2sdr_hold_bytes[M2SDR_HOLD_MAX];
+static int m2sdr_nhold;
+
+static void *m2sdr_pool_va;
+static unsigned long m2sdr_pool_pfn;
+static unsigned long m2sdr_pool_nr;
+static dma_addr_t m2sdr_pool_dma;
+static size_t m2sdr_pool_sz;
+static size_t m2sdr_pool_off;
+static int m2sdr_pool_mapped;
+static struct device *m2sdr_pool_dev;
+
+static bool m2sdr_is_pool_va(const void *va)
+{
+	return m2sdr_pool_va && va &&
+	       (const u8 *)va >= (const u8 *)m2sdr_pool_va &&
+	       (const u8 *)va < (const u8 *)m2sdr_pool_va + m2sdr_pool_sz;
+}
+
+static void m2sdr_free_one(struct device *dev, struct az_dmabuf_nfo *b)
+{
+	if (!b || !b->drv_addr || !b->len)
+		return;
+	/* Pool slices are released with the whole 1 GiB pool. */
+	if (!m2sdr_is_pool_va(b->drv_addr)) {
+		if (b->coherent)
+			dma_free_coherent(dev, b->len * 8, b->drv_addr, b->phys << 3);
+		else
+			dma_free_noncoherent(dev, b->len * 8, b->drv_addr,
+					     b->phys << 3, DMA_BIDIRECTIONAL);
+	}
+	b->drv_addr = NULL;
+	b->phys = 0;
+	b->len = 0;
+	b->coherent = 0;
+}
+
+static void m2sdr_sync_all(struct az_dev *p, enum dma_data_direction dir)
+{
+	int i;
+
+	if (!p)
+		return;
+	for (i = 0; i < MAX_BUFS; i++) {
+		if (!p->dma_bufs[i].drv_addr || p->dma_bufs[i].coherent)
+			continue;
+		dma_sync_single_for_cpu(&p->pdev->dev, p->dma_bufs[i].phys << 3,
+					p->dma_bufs[i].len * 8, dir);
+	}
+}
+
+static phys_addr_t m2sdr_page_phys(void *va)
+{
+	struct page *pg;
+
+	if (!va)
+		return 0;
+	if (is_vmalloc_addr(va)) {
+		pg = vmalloc_to_page(va);
+		return pg ? page_to_phys(pg) : 0;
+	}
+	return virt_to_phys(va);
+}
+
+static unsigned long m2sdr_page_pfn(void *va)
+{
+	struct page *pg;
+
+	if (!va)
+		return 0;
+	if (is_vmalloc_addr(va)) {
+		pg = vmalloc_to_page(va);
+		return pg ? page_to_pfn(pg) : 0;
+	}
+	return page_to_pfn(virt_to_page(va));
+}
+
+static bool m2sdr_dma_in_window(dma_addr_t dma, size_t bytes)
+{
+	return dma < M2SDR_DMA_WIN_END && (dma + bytes) <= M2SDR_DMA_WIN_END;
+}
+
+static bool m2sdr_dma_in_cma_hole(dma_addr_t dma, size_t bytes)
+{
+	dma_addr_t end = dma + bytes;
+
+	return (dma < M2SDR_CMA_HOLE_HI && end > M2SDR_CMA_HOLE_LO);
+}
+
+static void m2sdr_release_pool(void)
+{
+	if (!m2sdr_pool_va)
+		return;
+	if (m2sdr_pool_mapped && m2sdr_pool_dev)
+		dma_unmap_single(m2sdr_pool_dev, m2sdr_pool_dma,
+				 m2sdr_pool_sz, DMA_BIDIRECTIONAL);
+	free_contig_range(m2sdr_pool_pfn, m2sdr_pool_nr);
+	printk(KERN_INFO PFX "released 1GiB pool pfn=0x%lx nr=%lu\n",
+	       m2sdr_pool_pfn, m2sdr_pool_nr);
+	m2sdr_pool_va = NULL;
+	m2sdr_pool_pfn = 0;
+	m2sdr_pool_nr = 0;
+	m2sdr_pool_dma = 0;
+	m2sdr_pool_sz = 0;
+	m2sdr_pool_off = 0;
+	m2sdr_pool_mapped = 0;
+	m2sdr_pool_dev = NULL;
+}
+
+static int m2sdr_ensure_pool(struct device *dev)
+{
+	unsigned long nr, pfn, step;
+	u64 phys;
+	void *va;
+	dma_addr_t dma;
+	int ret, mapped, attempts, s;
+	size_t try_sz[] = { M2SDR_POOL_SIZE, 8u << 20 };
+
+	if (m2sdr_pool_va)
+		return 0;
+
+	for (s = 0; s < ARRAY_SIZE(try_sz); s++) {
+		nr = try_sz[s] >> PAGE_SHIFT;
+		step = pageblock_nr_pages;
+		if (!step)
+			step = nr;
+		attempts = 0;
+		for (phys = M2SDR_POOL_PHYS_LO;
+		     phys + try_sz[s] <= M2SDR_POOL_PHYS_HI;
+		     phys += (u64)step << PAGE_SHIFT) {
+			if (++attempts > 80)
+				break;
+			pfn = PHYS_PFN(phys);
+			if (!pfn_valid(pfn) || !pfn_valid(pfn + nr - 1))
+				continue;
+			ret = alloc_contig_range(pfn, pfn + nr, MIGRATE_MOVABLE,
+						 GFP_KERNEL);
+			if (ret)
+				continue;
+			va = page_address(pfn_to_page(pfn));
+			if (!va) {
+				free_contig_range(pfn, nr);
+				continue;
+			}
+			mapped = 0;
+			dma = dma_map_single(dev, va, try_sz[s], DMA_BIDIRECTIONAL);
+			if (dma_mapping_error(dev, dma))
+				dma = (dma_addr_t)phys;
+			else
+				mapped = 1;
+			if (!m2sdr_dma_in_window(dma, try_sz[s]) ||
+			    m2sdr_dma_in_cma_hole(dma, try_sz[s])) {
+				if (mapped)
+					dma_unmap_single(dev, dma, try_sz[s],
+							 DMA_BIDIRECTIONAL);
+				free_contig_range(pfn, nr);
+				continue;
+			}
+			m2sdr_pool_va = va;
+			m2sdr_pool_pfn = pfn;
+			m2sdr_pool_nr = nr;
+			m2sdr_pool_dma = dma;
+			m2sdr_pool_sz = try_sz[s];
+			m2sdr_pool_off = 0;
+			m2sdr_pool_mapped = mapped;
+			m2sdr_pool_dev = dev;
+			printk(KERN_INFO PFX "1GiB pool %zu bytes pfn=0x%lx dma=%pad va=%px %s\n",
+			       m2sdr_pool_sz, m2sdr_pool_pfn, &m2sdr_pool_dma,
+			       m2sdr_pool_va, mapped ? "mapped" : "identity");
+			return 0;
+		}
+	}
+	printk(KERN_WARNING PFX "1GiB pool alloc_contig_range failed\n");
+	return -ENOMEM;
+}
+
+static void m2sdr_drain_cma(struct device *dev)
+{
+	size_t try_sz[] = { 64u << 20, 48u << 20, 32u << 20, 16u << 20 };
+	int i;
+
+	if (m2sdr_cma_sink)
+		return;
+	for (i = 0; i < ARRAY_SIZE(try_sz); i++) {
+		m2sdr_cma_sink = dma_alloc_coherent(dev, try_sz[i],
+						    &m2sdr_cma_sink_dma, GFP_KERNEL);
+		if (m2sdr_cma_sink) {
+			m2sdr_cma_sink_sz = try_sz[i];
+			printk(KERN_INFO PFX "CMA sink %zu bytes dma=%pad\n",
+			       m2sdr_cma_sink_sz, &m2sdr_cma_sink_dma);
+			return;
+		}
+	}
+	printk(KERN_WARNING PFX "CMA sink alloc failed\n");
+}
+
+static void m2sdr_release_holds(struct device *dev)
+{
+	int i;
+
+	for (i = 0; i < m2sdr_nhold; i++) {
+		if (m2sdr_hold_va[i])
+			dma_free_coherent(dev, m2sdr_hold_bytes[i],
+					  m2sdr_hold_va[i], m2sdr_hold_dma[i]);
+		m2sdr_hold_va[i] = NULL;
+	}
+	m2sdr_nhold = 0;
+	if (m2sdr_cma_sink) {
+		dma_free_coherent(dev, m2sdr_cma_sink_sz, m2sdr_cma_sink,
+				  m2sdr_cma_sink_dma);
+		m2sdr_cma_sink = NULL;
+		m2sdr_cma_sink_sz = 0;
+	}
+	m2sdr_release_pool();
+}
+
+static void *m2sdr_alloc_dma(struct device *dev, size_t bytes, dma_addr_t *dma_out,
+			     u8 *coherent_out)
+{
+	void *va;
+	dma_addr_t dma;
+	int tries;
+	size_t n;
+
+	/* Prefer a contiguous 1–2 GiB pool so FPGA DMA never lands in the
+	 * 64 MiB CMA hole at 0x3b800000 (and so we do not relocate CMA). */
+	if (!m2sdr_ensure_pool(dev)) {
+		n = ALIGN(bytes, PAGE_SIZE);
+		if (m2sdr_pool_off + n <= m2sdr_pool_sz) {
+			va = (u8 *)m2sdr_pool_va + m2sdr_pool_off;
+			dma = m2sdr_pool_dma + m2sdr_pool_off;
+			m2sdr_pool_off += n;
+			*dma_out = dma;
+			*coherent_out = 0;
+			return va;
+		}
+		printk(KERN_WARNING PFX "1GiB pool exhausted off=%zu need=%zu\n",
+		       m2sdr_pool_off, n);
+	}
+
+	/* Ordinary pages first. dma_alloc_coherent on this 16 GiB Pi 5
+	 * always came from the 64 MiB CMA hole at 0x3b800000, which the
+	 * FPGA can be told to write while userspace never sees samples. */
+	va = dma_alloc_noncoherent(dev, bytes, &dma, DMA_BIDIRECTIONAL, GFP_KERNEL);
+	if (va) {
+		if (m2sdr_dma_in_window(dma, bytes) &&
+		    !m2sdr_dma_in_cma_hole(dma, bytes)) {
+			*dma_out = dma;
+			*coherent_out = 0;
+			return va;
+		}
+		printk(KERN_INFO PFX "noncoherent reject dma=%pad bytes=%zu\n",
+		       &dma, bytes);
+		dma_free_noncoherent(dev, bytes, va, dma, DMA_BIDIRECTIONAL);
+	}
+
+	m2sdr_drain_cma(dev);
+	for (tries = 0; tries < 48; tries++) {
+		va = dma_alloc_coherent(dev, bytes, &dma, GFP_KERNEL);
+		if (!va)
+			return NULL;
+		if (m2sdr_dma_in_window(dma, bytes) &&
+		    !m2sdr_dma_in_cma_hole(dma, bytes)) {
+			*dma_out = dma;
+			*coherent_out = 1;
+			return va;
+		}
+		printk(KERN_INFO PFX "reject dma=%pad bytes=%zu try=%d\n",
+		       &dma, bytes, tries);
+		if (m2sdr_nhold < M2SDR_HOLD_MAX) {
+			m2sdr_hold_va[m2sdr_nhold] = va;
+			m2sdr_hold_dma[m2sdr_nhold] = dma;
+			m2sdr_hold_bytes[m2sdr_nhold] = bytes;
+			m2sdr_nhold++;
+		} else {
+			dma_free_coherent(dev, bytes, va, dma);
+			return NULL;
+		}
+	}
+	return NULL;
+}
+
 static long alloc_node ( struct az_dev *p ,int idx ,int len ){ // len in u64
 void *ptr;
 if ( len != 0  ){
- 	if (p->dma_bufs[idx].len == len )     return p->dma_bufs[idx].phys;     
- 	else if (p->dma_bufs[idx].len != 0)    
-  
+ 	if (p->dma_bufs[idx].len == len )     return p->dma_bufs[idx].phys;
+ 	else if (p->dma_bufs[idx].len != 0)
+		m2sdr_free_one(&p->pdev->dev, &p->dma_bufs[idx]);
 
-  
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
-	dma_free_coherent(&p->pdev->dev,p->dma_bufs[idx].len * 8,p->dma_bufs[idx].drv_addr,p->dma_bufs[idx].phys << 3);
-#else
-	pci_free_consistent(p->pdev,p->dma_bufs[idx].len * 8,p->dma_bufs[idx].drv_addr,p->dma_bufs[idx].phys << 3);
-#endif
+	p->dma_bufs[idx].len = len ;   // in 64
 
-	p->dma_bufs[idx].len = len ;   // in 64 
+/* Pi 5 pcie-32bit-dma overlay inbound window is 2 GiB, not 4 GiB. */
+dma_set_coherent_mask(&p->pdev->dev, DMA_BIT_MASK(31));
+dma_set_mask(&p->pdev->dev, DMA_BIT_MASK(31));
 
+	 p->dma_bufs[idx].drv_addr = m2sdr_alloc_dma(&p->pdev->dev, len * 8,
+						     &p->dma_bufs[idx].phys,
+						     &p->dma_bufs[idx].coherent);
 
-dma_set_coherent_mask (   &p->pdev->dev  , DMA_BIT_MASK(32) ) ; 
-
-dma_set_mask (   &p->pdev->dev  , DMA_BIT_MASK(32) ) ; 
-
-
-//	#ifdef LO_KER 
-//       p->dma_bufs[idx].drv_addr = dma_alloc_consistent(p->pdev, len*8 ,  &(p->dma_bufs[idx].phys));
-//	#else 
-	/// p->dma_bufs[idx].drv_addr = dma_alloc_coherent ( &p->pdev->dev , len*8 ,  &(p->dma_bufs[idx].phys) ,GFP_KERNEL );
-	
-	 p->dma_bufs[idx].drv_addr = dma_alloc_coherent ( &p->pdev->dev , len*8 ,  &(p->dma_bufs[idx].phys),GFP_KERNEL );
-//	#endif 
-	
 	ptr =p->dma_bufs[idx].drv_addr ;
-	
-	if (ptr == NULL ) {	printk(KERN_NOTICE PFX ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>pci_alloc_consistent error while idx=%d  len=%d... \n" , idx,len*8); return  0 ;}
-	
-	p->dma_bufs[idx].phys >>= 3 ; // all phys has been lsf 3bit 
+
+	if (ptr == NULL ) {	printk(KERN_NOTICE PFX ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>pci_alloc_consistent error while idx=%d  len=%d... \n" , idx,len*8); p->dma_bufs[idx].len = 0; return  0 ;}
+	if (p->dma_bufs[idx].phys >= 0x80000000ULL) {
+		printk(KERN_ERR PFX "DMA addr %pad above 2GiB PCIe window idx=%d\n",
+		       &p->dma_bufs[idx].phys, idx);
+		if (p->dma_bufs[idx].coherent)
+			dma_free_coherent(&p->pdev->dev, len * 8, ptr, p->dma_bufs[idx].phys);
+		else
+			dma_free_noncoherent(&p->pdev->dev, len * 8, ptr,
+					     p->dma_bufs[idx].phys, DMA_BIDIRECTIONAL);
+		p->dma_bufs[idx].drv_addr = NULL;
+		p->dma_bufs[idx].phys = 0;
+		p->dma_bufs[idx].len = 0;
+		p->dma_bufs[idx].coherent = 0;
+		return 0;
+	}
+	{
+		phys_addr_t page_phys = m2sdr_page_phys(ptr);
+		printk(KERN_INFO PFX "alloc idx=%d bytes=%d dma=%pad page_phys=%pa virt=%px %s%s\n",
+		       idx, len * 8, &p->dma_bufs[idx].phys, &page_phys, ptr,
+		       m2sdr_is_pool_va(ptr) ? "pool" :
+		       (p->dma_bufs[idx].coherent ? "coherent" : "noncoherent"),
+		       (page_phys != (phys_addr_t)p->dma_bufs[idx].phys) ? " PHYS_MISMATCH" : "");
+	}
+
+	p->dma_bufs[idx].phys >>= 3 ; // all phys has been lsf 3bit
 
 }
 
-return p->dma_bufs[idx].phys; /////???????? 
+return p->dma_bufs[idx].phys; /////????????
 
 }
 
@@ -175,17 +486,9 @@ static void  free_node(struct az_dev *p  ) {
 	for(i=0;i<MAX_BUFS;++i){
 	if ( p->dma_bufs[i].drv_addr==NULL) continue ;	
 	printk(KERN_NOTICE PFX "freeing idx=%d ... \n" , i);
-	
-		
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
-dma_free_coherent(&p->pdev->dev,p->dma_bufs[i].len * 8,p->dma_bufs[i].drv_addr,p->dma_bufs[i].phys << 3);
-#else
-pci_free_consistent(p->pdev,p->dma_bufs[i].len * 8,p->dma_bufs[i].drv_addr,p->dma_bufs[i].phys << 3);
-#endif
-
-
-	
+	m2sdr_free_one(&p->pdev->dev, &p->dma_bufs[i]);
 	}
+	m2sdr_release_holds(&p->pdev->dev);
 }
 
 
@@ -196,6 +499,7 @@ static void init_node (struct az_dev *p ){
 		p->dma_bufs[i].drv_addr = NULL;
 		p->dma_bufs[i].phys = (dma_addr_t)NULL ;
 		p->dma_bufs[i].len = 0 ;
+		p->dma_bufs[i].coherent = 0 ;
 	} 
 }
 
@@ -274,6 +578,9 @@ int idx = * offs ;
 	 atomic_dec(&rd_cond) ; 
      return  1   ;
     }else {
+	if (d->dma_bufs[idx].drv_addr && !d->dma_bufs[idx].coherent)
+		dma_sync_single_for_cpu(&d->pdev->dev, d->dma_bufs[idx].phys << 3,
+					d->dma_bufs[idx].len * 8, DMA_FROM_DEVICE);
 	copy_to_user ( user_buffer ,   d->dma_bufs[idx].drv_addr ,to_copy_in_bytes  ) ; 
  
 }
@@ -286,7 +593,10 @@ static ssize_t az_write(struct file *File, const char *user_buffer, size_t count
 int to_copy_in_bytes = count;
 char *p8 ;  
 int idx = * offs ;
-copy_from_user (  d->dma_bufs[idx].drv_addr , user_buffer , to_copy_in_bytes  ) ; 
+copy_from_user (  d->dma_bufs[idx].drv_addr , user_buffer , to_copy_in_bytes  ) ;
+if (d->dma_bufs[idx].drv_addr && !d->dma_bufs[idx].coherent)
+	dma_sync_single_for_device(&d->pdev->dev, d->dma_bufs[idx].phys << 3,
+				   d->dma_bufs[idx].len * 8, DMA_TO_DEVICE);
 return to_copy_in_bytes;
 }
 
@@ -302,6 +612,7 @@ static unsigned int mydev_poll(struct file *filp, poll_table *wait)
      int r = atomic_read(&poll_cond) ; 
 	 if (r ==0 )	wait_event(waitqueue, atomic_read(&poll_cond) >=1 );
 	 atomic_dec(&poll_cond) ;
+	 m2sdr_sync_all(d, DMA_BIDIRECTIONAL);
 	 mask |= POLLIN | POLLRDNORM | 1<<1;
 	 
 	   printk(KERN_NOTICE PFX "mydev_poll mask=%08x \n",mask); 
@@ -372,9 +683,12 @@ static int  mmap_23( struct az_dev *p,struct vm_area_struct *vma) { //should io_
  #else 
  vma->vm_flags |= VM_LOCKED; 
  #endif  
-	printk(KERN_INFO PFX "mmap_23 start to loop!\n");
+	printk(KERN_INFO PFX "mmap_23 vma=%lx-%lx len=%lu pgoff=%lx\n",
+	       vma->vm_start, vma->vm_end, vma->vm_end - vma->vm_start, vma->vm_pgoff);
     for (i =0, off = 0; i < MAX_BUFS ; ++i ) {//MAX_BUFS
 		if ( pbufs[i].drv_addr == NULL )  return 0;
+		if (vma->vm_start + off >= vma->vm_end)
+			return 0;
 		
 #ifdef VA_DMA_ADDR_FIXUP
         void *va = phys_to_virt(dma_to_phys(&xtrxdev->pdev->dev, pbufs[i].phys));
@@ -386,17 +700,38 @@ if (va==NULL)  {
     printk(KERN_INFO PFX "mmap_23 start i=%d va==NULL !\n" , i  ); 
 return 0;
 }
-        pfn = page_to_pfn(virt_to_page(va));
+	{
+		dma_addr_t dma = (dma_addr_t)pbufs[i].phys << 3;
+		unsigned long dma_pfn = dma >> PAGE_SHIFT;
+		phys_addr_t page_phys = m2sdr_page_phys(va);
+		/* Map the CPU pages backing drv_addr (vmalloc_to_page). FPGA is
+		 * programmed with dma; log if that is not the same physical page. */
+		pfn = m2sdr_page_pfn(va);
+		if (!pfn)
+			pfn = dma_pfn;
+		if (i < 4)
+			printk(KERN_INFO PFX "mmap_23 i=%d dma=%pad page_phys=%pa dma_pfn=0x%lx page_pfn=0x%lx bytes=%d%s\n",
+			       i, &dma, &page_phys, dma_pfn, pfn, pbufs[i].len * 8,
+			       (dma_pfn != pfn) ? " PFN_MISMATCH" : "");
+	}
 #if defined(__arm__) || defined(__aarch64__)
-        /* not cached */
-     vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+        vma->vm_page_prot = pgprot_dmacoherent(vma->vm_page_prot);
 #endif
 
-        ret = remap_pfn_range(vma, vma->vm_start + off,
-                              pfn,
-                              pbufs[i].len*8,
-                              vma->vm_page_prot);
-        off += pbufs[i].len*8 ; 
+	{
+		unsigned long map_len = pbufs[i].len * 8;
+		unsigned long remain = vma->vm_end - (vma->vm_start + off);
+		if (map_len > remain)
+			map_len = remain;
+		ret = remap_pfn_range(vma, vma->vm_start + off, pfn, map_len,
+				      vma->vm_page_prot);
+		if (ret) {
+			printk(KERN_ERR PFX "mmap_23 remap i=%d pfn=0x%lx len=%lu ret=%d\n",
+			       i, pfn, map_len, ret);
+			return ret;
+		}
+		off += map_len;
+	} 
     }
     return 0 ;
 }
@@ -530,9 +865,9 @@ static int az_probe(struct pci_dev *pdev, const struct pci_device_id *id) {
     
     
     #ifdef LO_KER 
-    if(pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32))) 
+    if(pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(31))) 
     #else 
-    if(dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32))) 
+    if(dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(31))) 
     #endif 
     
     {
