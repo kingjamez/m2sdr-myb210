@@ -175,7 +175,7 @@ Or `./scripts/verify-rx.sh`.
 
 They see the card **only** if they load this `libuhd.so` (same prefix). A distro package linked against distro/`libuhd.so.4.1` will not.
 
-SDR++: rebuild with `-DOPT_BUILD_USRP_SOURCE=ON` against the vendor UHD. In the UI the source is named **USRP**, device like `USRP b200 [<serial>]`. Start at 1–8 MS/s on a Pi 5 that shares PCIe x1 with NVMe.
+SDR++: rebuild with `-DOPT_BUILD_USRP_SOURCE=ON` against the vendor UHD, and apply [patches/sdrpp-usrp-source-myb210.patch](patches/sdrpp-usrp-source-myb210.patch). In the UI the source is named **USRP**. On a Pi 5 start at **1 MS/s**, FFT **8192**. Stock SDR++ “Auto” bandwidth programs the AD9361 analog filter to 200 kHz and looks like a 50 dB bowl; selecting USRP without the patch aborts in vendor `libpcie` callbacks.
 
 See [docs/applications.md](docs/applications.md).
 
@@ -201,6 +201,8 @@ Do **not** put `cma=64M@1024M` on the cmdline. That moves all CMA to 1 GiB, stre
 | `No UHD Devices Found` | Distro/Ettus UHD, or `/dev/FPGA` missing | Vendor 4.8 + `mymodule` loaded |
 | Gqrx/GNU Radio silent | Linked to `libuhd.so.4.1.0` | Rebuild against vendor 4.8 |
 | Official `xdma.ko` fails | `10ee:7022` is **not** XDMA | Use `mymodule` |
+| SDR++ aborts when USRP is selected | Local `multi_usrp` destroyed while `libpcie` C2H callbacks run | Apply `patches/sdrpp-usrp-source-myb210.patch` |
+| Waterfall 50 dB bowl, extra spurs | Analog RX BW left at AD9361 200 kHz min | Same patch: set analog BW = sample rate; enable DC/IQ auto |
 
 Requested vendor changes for the next software drop: **[VENDOR-FEEDBACK.md](VENDOR-FEEDBACK.md)**.
 
@@ -222,6 +224,7 @@ uhd-overlay/          vendor UHD glue (libpcie.a, MyB210 discovery)
 vendor/               original HamGeek zips (driver r25 + UHD 4.3–4.8)
 scripts/              deps, driver, UHD, Pi 5, RX verify
 docs/                 Pi 5, generic Linux, apps, hardware
+patches/              SDR++ USRP source patch for MyB210
 VENDOR-FEEDBACK.md    notes for HamGeek’s next revision
 ```
 
