@@ -1,5 +1,5 @@
 diff --git a/source_modules/usrp_source/src/main.cpp b/source_modules/usrp_source/src/main.cpp
-index 650fc20..442ae1f 100644
+index 650fc20..38a8100 100644
 --- a/source_modules/usrp_source/src/main.cpp
 +++ b/source_modules/usrp_source/src/main.cpp
 @@ -12,6 +12,7 @@
@@ -21,7 +21,7 @@ index 650fc20..442ae1f 100644
 +        // (libusb_async_cb / my_c2h_buf_cb).
 +        try {
 +            if (!dev) {
-+                dev = uhd::usrp::multi_usrp::make(devices[devId]);
++                dev = uhd::usrp::multi_usrp::make(xportArgs(devices[devId]));
 +            }
 +        }
 +        catch (const std::exception& e) {
@@ -68,7 +68,7 @@ index 650fc20..442ae1f 100644
 +                }
              }
          }
-+        for (double f : {1e6, 2e6, 4e6}) { addRate(f); }
++        for (double f : {1e6, 2e6, 4e6, 8e6, 16e6, 32e6, 40e6, 44e6}) { addRate(f); }
  
          // List antennas
          antennas.clear();
@@ -150,14 +150,15 @@ index 650fc20..442ae1f 100644
          }
  
          core::setInputSampleRate(_this->sampleRate);
-@@ -263,14 +291,45 @@ private:
+@@ -263,14 +291,46 @@ private:
          if (_this->running) { return; }
          if (_this->selectedSer.empty()) { return; }
  
 -        _this->dev = uhd::usrp::multi_usrp::make(_this->devices[_this->devId]);
 +        if (!_this->dev) {
 +            try {
-+                _this->dev = uhd::usrp::multi_usrp::make(_this->devices[_this->devId]);
++                _this->dev = uhd::usrp::multi_usrp::make(
++                    _this->xportArgs(_this->devices[_this->devId]));
 +            }
 +            catch (const std::exception& e) {
 +                flog::error("USRP start make() failed: {}", e.what());
@@ -198,7 +199,7 @@ index 650fc20..442ae1f 100644
          
          uhd::stream_args_t sargs;
          sargs.channels.clear();
-@@ -298,14 +357,18 @@ private:
+@@ -298,14 +358,18 @@ private:
          _this->stream.clearWriteStop();
          
          _this->streamer.reset();
@@ -219,7 +220,26 @@ index 650fc20..442ae1f 100644
              _this->dev->set_rx_freq(freq, _this->chanId);
          }
          _this->freq = freq;
-@@ -461,7 +524,7 @@ private:
+@@ -423,6 +487,18 @@ private:
+         }
+     }
+ 
++    // HamGeek default recv_frame_size is 3088 bytes and collapses at 16 MS/s.
++    // Ettus-sized 8176 B frames: 32 buffers are lossless at 32 MS/s; 64 buffers
++    // are lossless at 40 and 44 MS/s. 50+ still overruns on this transport.
++    uhd::device_addr_t xportArgs(const uhd::device_addr_t& base) {
++        uhd::device_addr_t a = base;
++        if (!a.has_key("recv_frame_size"))
++            a["recv_frame_size"] = "8176";
++        if (!a.has_key("num_recv_frames"))
++            a["num_recv_frames"] = "64";
++        return a;
++    }
++
+     uint32_t floor2(uint32_t val) {
+         val |= val >> 1;
+         val |= val >> 2;
+@@ -461,7 +537,7 @@ private:
      double sampleRate;
      SourceManager::SourceHandler handler;
      bool running = false;

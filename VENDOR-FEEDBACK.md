@@ -22,6 +22,7 @@ Please treat this as a punch list for the next zip you ship to customers.
 | Card | `10ee:7022` subsystem `10ee:0007`, `/dev/FPGA`, serial **191272** |
 | Coexistence | NVMe OS disk on the same switch |
 | Proof | `rx_samples_to_file --args type=b200 --nsamps 20000 --rate 1e6` → `rx_exit=0`, 80000-byte file |
+| Lossless RX ceiling | **44 MS/s** with `recv_frame_size=8176,num_recv_frames=64`. 50 and 61.44 MHz clocks succeed; streaming drops. |
 
 HDMI stayed up. Relocating CMA was **not** used in the working configuration.
 
@@ -89,6 +90,32 @@ Customers will try SDR++, Gqrx, GNU Radio. Those apps only work if they link **y
 
 **Ask:** one paragraph in the handbook: “Rebuild SDR++ with `OPT_BUILD_USRP_SOURCE=ON` against this UHD; source name is USRP, `type=b200`. Distro UHD will not work.”
 
+### 6. USB-style frames: default 3088 bytes is why 16 MS/s dies
+
+**Severity: high (customers will think the card is 8 MS/s).**
+
+Your UHD still talks to the FPGA like a USB B210. The default `recv_frame_size` is **3088 bytes** (`24*32*4+16`). Ettus B210s use ~8176. On this Pi 5 + EP-0180 (Gen2 x1, NVMe on the same switch):
+
+| Args | Result |
+|---|---|
+| default ~3088 / 32 | lossless at 8 MS/s; **16 MS/s times out** (~7.7 M of 64 M samples) |
+| `recv_frame_size=8176,num_recv_frames=32` | lossless at **32 MS/s** |
+| `recv_frame_size=8176,num_recv_frames=64` | lossless at **40 and 44 MS/s** |
+| `recv_frame_size=16360` | `ERROR_CODE_BAD_PACKET` / sequence errors |
+| `num_recv_frames=128` | `uhd::assertion_error` |
+| 50 MS/s or 61.44 MS/s, 8176 / 64 | AD9361 **does** set that master clock; then overruns / timeouts. 61.44 got 241 M of 246 M samples (not lossless). Teardown often `boost::lock_error` in `my_c2h_buf_cb`. |
+
+PCIe Gen2 x1 average bandwidth is ~500 MB/s theoretical. 61.44 MS/s sc16 is 246 MB/s (~49%). This is **not** a wire-capacity problem. It is frame rate + `wait_for_ack` in closed `libpcie`.
+
+**Ask:**
+
+- Default `recv_frame_size` to **8176** (or document the args in the handbook). 3088 is a self-inflicted 16 MS/s cap.
+- Do not advertise 61.44 MS/s on Pi 5 until `libpcie` can sustain it. 44 MS/s is the community lossless number with your current blobs.
+- Open `libpcie` (or ship a `.so`) so C2H can use large DMA buffers instead of USB packets. That is the path to 50–61.44, not a faster HAT.
+- FPGA x2: this bitstream advertises `max_link_width=2` but the Pi 5 FFC + ASM1184e uplink are x1. x2 will not help on this carrier. A desktop M.2 x2/x4 slot might.
+
+Booting the OS from SD (NVMe idle) does not change the FPGA link width and did not fix 16 MS/s. The 3088-byte default did.
+
 ---
 
 ## Tests we recommend you run before the next zip
@@ -98,11 +125,13 @@ On **x86_64 4 KiB** (your usual) **and** on **Pi 5**:
 1. `getconf PAGESIZE` printed in the log.
 2. `uhd_find_devices` → MyB210.
 3. `rx_samples_to_file --nsamps 20000 --rate 1e6` → non-zero file, `rx_exit=0`.
-4. Same test at 8 MS/s.
-5. HDMI still up after RX (Pi 5).
-6. `dmesg` DMA addresses **not** in `0x3b000000–0x3fffffff` on Pi 5.
-7. Do **not** `rmmod` as a test; if you do, it must not Oops.
-8. Optional: SDR++ USRP source plays.
+4. Same test at 8 MS/s with default args.
+5. `benchmark_rate --args "type=b200,recv_frame_size=8176,num_recv_frames=64" --rx_rate 16e6` → 0 drops.
+6. Same at 32e6, 40e6, 44e6, 61.44e6. Publish the first rate that drops.
+7. HDMI still up after RX (Pi 5).
+8. `dmesg` DMA addresses **not** in `0x3b000000–0x3fffffff` on Pi 5.
+9. Do **not** `rmmod` as a test; if you do, it must not Oops.
+10. Optional: SDR++ USRP source plays at 40 MS/s with analog BW = sample rate.
 
 If (3) fails on Pi 5 16 KiB, the mmap bug is still present. If (3) fails on Pi 5 4 KiB with addresses in `0x3bcxxxxx`, the CMA-hole bug is still present.
 
