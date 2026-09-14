@@ -219,7 +219,7 @@ Requested vendor changes for the next software drop: **[VENDOR-FEEDBACK.md](VEND
 
 ## Hardware I/O
 
-See [docs/hardware.md](docs/hardware.md). RX ports: do not exceed 0 dBm. Ext clock default 10 MHz. GPSDO present on the reference board.
+See [docs/hardware.md](docs/hardware.md). RX ports: do not exceed 0 dBm. Ext clock default 10 MHz. GPSDO present on the reference board. The translated vendor quick-start manual with interface/LED photos: **[docs/getting-started-guide.md](docs/getting-started-guide.md)**.
 
 ---
 
@@ -232,8 +232,8 @@ modules-load.d/       autoload mymodule
 uhd-overlay/          vendor UHD glue (libpcie.a, MyB210 discovery)
 vendor/               original HamGeek zips (driver r25 + UHD 4.3–4.8)
 scripts/              deps, driver, UHD, Pi 5, verify-rx, benchmark-rate
-docs/                 Pi 5, generic Linux, apps, hardware, sample-rate
-patches/              SDR++ USRP source patch for MyB210
+docs/                 Pi 5, generic Linux, apps, hardware, sample-rate,
+                      translated vendor getting-started guide (+ screenshots)
 VENDOR-FEEDBACK.md    notes for HamGeek’s next revision
 ```
 
