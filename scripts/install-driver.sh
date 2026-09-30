@@ -20,6 +20,15 @@ sudo cp "$SRC/mymodule.c" "$SRC/Makefile" "$SRC/dkms.conf" "/usr/src/m2sdr-${VER
 LIVE=0
 lsmod | grep -q '^mymodule' && LIVE=1
 
+# Drop older m2sdr DKMS versions (e.g. 0.26) so only one mymodule is built for
+# future kernels. This only removes files; it never unloads the running module.
+for OLD in $(dkms status -m m2sdr 2>/dev/null | sed -E 's#^m2sdr[/, ]+([^,:]+)[,:].*#\1#' | sort -u); do
+  if [[ "$OLD" != "$VER" ]]; then
+    echo "Removing old DKMS package m2sdr/$OLD"
+    sudo dkms remove -m m2sdr -v "$OLD" --all || true
+  fi
+done
+
 if [[ "$LIVE" -eq 0 ]] && dkms status -m m2sdr -v "$VER" 2>/dev/null | grep -q installed; then
   sudo dkms remove -m m2sdr -v "$VER" --all || true
 fi

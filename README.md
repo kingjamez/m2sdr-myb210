@@ -8,6 +8,8 @@ Unofficial. Not affiliated with Ettus/NI or HamGeek. Vendor contact on the after
 
 **Full rate works (2026-09-30).** The old "20 MS/s ceiling" was a completion-count bug in the vendor's closed `libpcie`; `install-uhd.sh` now patches it. On an x86_64 host (Intel N100) the card streams **56 MS/s on one channel** and **30.72 MS/s on both channels** in `benchmark_rate` with `recv_frame_size=12272`. The Raspberry Pi 5 streamed at 16–20 MS/s before the fix and has not been re-tested since. Details: [docs/sample-rate.md](docs/sample-rate.md).
 
+**Already have it installed?** Apply the fix without rebuilding UHD: **[docs/upgrading.md](docs/upgrading.md)**.
+
 ---
 
 ## What you need
@@ -221,6 +223,8 @@ Do **not** put `cma=64M@1024M` on the cmdline. That moves all CMA to 1 GiB, stre
 | Rare single overruns at 56 MS/s | Only 48 RX frames (~2.6 ms), forced by vendor `b200_impl.cpp` | Ignore, or rebuild UHD with ~60 |
 | SDR++ exits with `RX PLL NOT LOCKED` while retuning quickly | UHD throws; stock plugin does not catch it in `tune()` | [patches/sdrpp-usrp-source-myb210.patch](patches/sdrpp-usrp-source-myb210.patch) retries the tune |
 
+Installing the high-rate fix on an existing setup: **[docs/upgrading.md](docs/upgrading.md)**.
+
 Requested vendor changes for the next software drop: **[VENDOR-FEEDBACK.md](VENDOR-FEEDBACK.md)**.
 
 ---
@@ -239,8 +243,8 @@ udev/                 /dev/FPGA mode 666
 modules-load.d/       autoload mymodule
 uhd-overlay/          vendor UHD glue (libpcie.a, MyB210 discovery)
 vendor/               original HamGeek zips (driver r25 + UHD 4.3–4.8)
-scripts/              deps, driver, UHD, Pi 5, verify-rx, benchmark-rate
-docs/                 Pi 5, generic Linux, apps, hardware, sample-rate,
+scripts/              deps, driver, UHD, libpcie fix, Pi 5, verify-rx, benchmark-rate
+docs/                 upgrading (high-rate fix), Pi 5, generic Linux, apps, hardware, sample-rate,
                       translated vendor getting-started guide (+ screenshots)
 VENDOR-FEEDBACK.md    notes for HamGeek’s next revision
 ```
