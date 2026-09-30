@@ -12,7 +12,7 @@ Reference hardware that **streamed IQ samples**:
 | UHD | vendor 4.8.0.0 in `/usr/local` |
 | Driver | community `mymodule.c` (`srcversion 65A8816AECE37617225E4AE`) |
 | Verified | `rx_samples_to_file --args type=b200 --nsamps 20000 --rate 1e6` → `rx_exit=0`, 80000-byte file, HDMI stayed up |
-| Sustained RX ceiling | **20 MS/s** in SDR++ (`recv_frame_size=8176,num_recv_frames=64`). 16 MS/s is conservative. 24+ dies in seconds. [sample-rate.md](sample-rate.md) |
+| Sustained RX ceiling | **20 MS/s** in SDR++ before the `libpcie` fix (`recv_frame_size=8176`). Not yet re-tested with the fix. [sample-rate.md](sample-rate.md) |
 
 The Pi 5 FFC is PCIe **x1**. The M2SDR bitstream advertises x2; the link trains **5 GT/s x1**. That is expected. Booting the OS from SD (leaving the NVMe idle) does **not** widen the FPGA link.
 

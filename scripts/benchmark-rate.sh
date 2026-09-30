@@ -11,7 +11,7 @@ if [[ "$(getconf PAGESIZE)" != "4096" ]]; then
   exit 1
 fi
 
-ARGS="${ARGS:-type=b200,recv_frame_size=8176,num_recv_frames=64}"
+ARGS="${ARGS:-type=b200,recv_frame_size=12272}"
 RATE="${RATE:-20e6}"
 DURATION="${DURATION:-10}"
 

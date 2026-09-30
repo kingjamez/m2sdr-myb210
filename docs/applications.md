@@ -9,14 +9,14 @@ uhd_config_info --version          # 4.8.0.0-0-unknown
 uhd_find_devices
 uhd_usrp_probe --args "type=b200"
 /usr/local/lib/uhd/examples/rx_samples_to_file \
-  --args "type=b200,recv_frame_size=8176,num_recv_frames=64" \
+  --args "type=b200,recv_frame_size=12272" \
   --nsamps 20000 --rate 1e6 --freq 100e6 --gain 40 \
   --file /tmp/m2sdr_rx.dat
 /usr/local/lib/uhd/examples/rx_ascii_art_dft \
-  --args "type=b200,recv_frame_size=8176,num_recv_frames=64" \
+  --args "type=b200,recv_frame_size=12272" \
   --rate 1e6 --freq 100e6 --gain 40
 /usr/local/lib/uhd/examples/benchmark_rate \
-  --args "type=b200,recv_frame_size=8176,num_recv_frames=64" \
+  --args "type=b200,recv_frame_size=12272" \
   --rx_rate 20e6 --duration 10
 ```
 

@@ -6,7 +6,7 @@ This is **not** Enjoy Digital LiteX-M2SDR (`10ee:7024` / `m2sdr.ko` / SoapySDR).
 
 Unofficial. Not affiliated with Ettus/NI or HamGeek. Vendor contact on the after-sales package: `hamgeek@163.com`.
 
-**Streaming is verified** on a Raspberry Pi 5 (4 KiB pages, community DMA-pool driver, vendor UHD 4.8.0.0): `rx_samples_to_file` wrote 20 000 sc16 samples, SDR++ USRP source opened the card as a B210. With Ettus-sized USB frames (`recv_frame_size=8176,num_recv_frames=64`) **SDR++ is solid at 16–20 MS/s**. 24+ dies in seconds. 32–44 MS/s can look clean for a 4 s UHD burst and then fall over. Details: [docs/sample-rate.md](docs/sample-rate.md).
+**Full rate works (2026-09-30).** The old "20 MS/s ceiling" was a completion-count bug in the vendor's closed `libpcie`; `install-uhd.sh` now patches it. On an x86_64 host (Intel N100) the card streams **56 MS/s on one channel** and **30.72 MS/s on both channels** in `benchmark_rate` with `recv_frame_size=12272`. The Raspberry Pi 5 streamed at 16–20 MS/s before the fix and has not been re-tested since. Details: [docs/sample-rate.md](docs/sample-rate.md).
 
 ---
 
@@ -67,11 +67,18 @@ rx_exit=0
 Device args for every UHD tool:
 
 ```text
-type=b200,recv_frame_size=8176,num_recv_frames=64
+type=b200,recv_frame_size=12272
 # or serial=<your serial>   (reference card: 191272)
 ```
 
-HamGeek’s default 3088-byte USB frames collapse at 16 MS/s. The 8176/64 args are what make **16 and 20 MS/s** last on the reference Pi 5. Do not use `recv_frame_size=16360` (sequence errors). See [docs/sample-rate.md](docs/sample-rate.md).
+Or set it once for every program in `/etc/uhd/uhd.conf`:
+
+```ini
+[type=b200]
+recv_frame_size=12272
+```
+
+HamGeek’s default 3088-byte frames mean ~73k packets/s at 56 MS/s. 12272 (3064 samples/packet) is the largest clean size; `recv_frame_size=16360` gives sequence errors. `num_recv_frames` is ignored (vendor code forces 48). See [docs/sample-rate.md](docs/sample-rate.md).
 
 On a **Raspberry Pi 5**, do the [Pi 5 extra steps](docs/raspberry-pi-5.md) **before** step 2 (4 KiB kernel, 32-bit DMA overlay). Then reboot and run the same driver/UHD/verify commands.
 
@@ -167,7 +174,7 @@ Device Address:
 uhd_find_devices
 uhd_usrp_probe --args "type=b200"
 /usr/local/lib/uhd/examples/rx_samples_to_file \
-  --args "type=b200,recv_frame_size=8176,num_recv_frames=64" \
+  --args "type=b200,recv_frame_size=12272" \
   --nsamps 20000 --rate 1e6 --freq 100e6 --gain 40 \
   --file /tmp/m2sdr_rx.dat
 ```
@@ -190,7 +197,7 @@ Required extras (32-bit DMA overlay, 4 KiB `kernel8.img`, no CMA relocate):
 
 **[docs/raspberry-pi-5.md](docs/raspberry-pi-5.md)** and `scripts/setup-raspberry-pi5.sh`.
 
-Sample-rate work on this host: **[docs/sample-rate.md](docs/sample-rate.md)** (20 MS/s SDR++ ceiling; 16 MS/s conservative). `./scripts/benchmark-rate.sh` is the 20 MS/s check (`--duration 10`).
+Sample-rate work on this host: **[docs/sample-rate.md](docs/sample-rate.md)** (20 MS/s SDR++ ceiling before the `libpcie` fix; not yet re-tested with it). `./scripts/benchmark-rate.sh` is the 20 MS/s check (`--duration 10`).
 
 Do **not** put `cma=64M@1024M` on the cmdline. That moves all CMA to 1 GiB, streaming can work, **HDMI dies**.
 
@@ -208,10 +215,11 @@ Do **not** put `cma=64M@1024M` on the cmdline. That moves all CMA to 1 GiB, stre
 | Official `xdma.ko` fails | `10ee:7022` is **not** XDMA | Use `mymodule` |
 | SDR++ aborts when USRP is selected | Local `multi_usrp` destroyed while `libpcie` C2H callbacks run | Apply `patches/sdrpp-usrp-source-myb210.patch` |
 | Waterfall 50 dB bowl, extra spurs | Analog RX BW left at AD9361 200 kHz min | Same patch: set analog BW = sample rate; enable DC/IQ auto |
-| 16 MS/s timeouts / ~7.7 M of 64 M samples | HamGeek default `recv_frame_size` **3088** bytes | `recv_frame_size=8176,num_recv_frames=64` |
-| 24 / 32 MS/s starts then dies (~4 s at 32) | Vendor `libpcie` cannot sustain USB-style C2H; 4 s tests lied | Stay at **16–20 MS/s** in SDR++. 32+ is HamGeek |
-| Sequence errors / `BAD_PACKET` | `recv_frame_size=16360` | Stay at **8176**, never 16360 on this transport |
-| 48 / 50 / 61.44 MS/s drops | Closed `libpcie` USB emulation, not PCIe average bandwidth | Sustained ceiling is **20 MS/s**. 50+ is a HamGeek fix |
+| Stream stops after seconds at ≥20 MS/s (`ERROR_CODE_TIMEOUT`, then `wait_for_ack`) | `libpcie` `do_cb` masks the pending-completion count with `0x3f`; a backlog of 64 deadlocks RX and control | `scripts/patch-libpcie.py` (run by `install-uhd.sh`) + driver 0.27 |
+| Overflows at high rates | Default `recv_frame_size` **3088** (one IRQ per 768 samples) | `recv_frame_size=12272` |
+| Sequence errors / `BAD_PACKET` | `recv_frame_size=16360` | Stay at **12272** or below |
+| Rare single overruns at 56 MS/s | Only 48 RX frames (~2.6 ms), forced by vendor `b200_impl.cpp` | Ignore, or rebuild UHD with ~60 |
+| SDR++ exits with `RX PLL NOT LOCKED` while retuning quickly | UHD throws; stock plugin does not catch it in `tune()` | [patches/sdrpp-usrp-source-myb210.patch](patches/sdrpp-usrp-source-myb210.patch) retries the tune |
 
 Requested vendor changes for the next software drop: **[VENDOR-FEEDBACK.md](VENDOR-FEEDBACK.md)**.
 

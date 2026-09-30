@@ -14,5 +14,6 @@ Fixes verified on a HamGeek MyB210 (vendor UHD 4.8, Pi 5):
 - Inject `recv_frame_size=8176,num_recv_frames=64` on `make()` (HamGeek default 3088-byte frames die at 16 MS/s).
 - Rate combo includes 1 / 2 / 4 / 8 / 16 / **20** MS/s (SDR++ sustained ceiling on this Pi).
 - Drain overflows and restart the stream instead of freezing.
+- Retry `set_rx_freq` up to 3 times in `tune()`: UHD throws `RX PLL NOT LOCKED` if the lock check runs early, and stepping the frequency quickly otherwise killed SDR++.
 
 Fully quit SDR++ after installing `usrp_source.so`. See [docs/applications.md](../docs/applications.md) and [docs/sample-rate.md](../docs/sample-rate.md).

@@ -1,11 +1,66 @@
-# Sample rate on Raspberry Pi 5
+# Sample rate
 
-How to get the highest **usable** RX rate on the reference host (Pi 5 + 52Pi EP-0180 + NVMe root + community `mymodule` + vendor UHD 4.8).
+**Update 2026-09-30: the "20 MS/s ceiling" was a bug in vendor `libpcie`, and it is fixed.** With `scripts/patch-libpcie.py` (applied by `install-uhd.sh`), an x86_64 host streams **56 MS/s on one channel** and **30.72 MS/s on both channels**, lossless in `benchmark_rate`. See [Root cause and fix](#root-cause-and-fix-2026-09-30) below. The Raspberry Pi 5 sections after it are the earlier investigation; the Pi has **not** been re-tested with the fix yet.
 
-The AD9361 will clock any of 32 / 40 / 44 / 48 / 50 / 56 / 61.44 MHz. That is not the limit. The limit is vendor `libpcie` talking to the FPGA like a USB B210.
+---
 
-**Sustained ceiling (SDR++ and long UHD runs): 20 MS/s.**  
-**16 MS/s is the rock-solid daily rate.** 24+ dies in a few seconds. 32–44 MS/s can look lossless for a **4 s** `benchmark_rate` and then fall over — those 4 s numbers are bursts, not a ceiling. 50+ needs HamGeek.
+## Root cause and fix (2026-09-30)
+
+`libpcie` runs a `do_cb` thread that drains the FPGA's DMA completion FIFO. It reads the pending count from BAR0 register `0x1c` and masks it with **`0x3f`**. The card raises one MSI per packet (~27,500/s at 20 MS/s with the default 3088-byte frames). If `do_cb` is briefly starved and 64 or more completions pile up, the masked count reads wrong (64 → 0). `do_cb` stops draining, every DMA descriptor is used up, the FPGA stops interrupting, and **RX data and control replies (same FIFO) both stop**. UHD then reports `ERROR_CODE_TIMEOUT` and asserts in `wait_for_ack`.
+
+Watched live by polling register `0x1c` from a second process during a 20 MS/s run: the backlog jumped to `0x53` (83) at 7.0 s, MSIs dropped to zero, and it settled at `0x40`. (Reading register `0x1d` **pops** the FIFO; only peek `0x1c`.)
+
+The fix widens the mask to `0x1ff`: one instruction in `x64_libpcie.a` and in `arm_libpcie.a` (same library in vendor UHD 4.3–4.8). Community driver 0.27 also makes the completion wait re-poll after 2 ms instead of stalling on a missed MSI. See [pcie-driver/COMMUNITY-CHANGES.md](../pcie-driver/COMMUNITY-CHANGES.md).
+
+### Frame size after the fix
+
+Larger frames mean fewer interrupts, syscalls and thread handoffs per second. Measured on x86_64 at 56 MS/s, 1 channel:
+
+| `recv_frame_size` | Samples/packet | Result |
+|---|---|---|
+| 3088 (vendor default) | 768 | overflows at high rates (~73k packets/s) |
+| 4104 | 1022 | overflows |
+| 8176 | 2040 | clean 10 s; 8 overruns in 60 s |
+| **12272** | **3064** | **clean** (see below) |
+| 16360 | 4086 | ~1% sequence errors, `bad vrt header` bursts (FPGA packet limit < 16 KiB) |
+
+Use **`recv_frame_size=12272`**. To apply it to every UHD program, create `/etc/uhd/uhd.conf`:
+
+```ini
+[type=b200]
+recv_frame_size=12272
+```
+
+Explicit device args still override it.
+
+`num_recv_frames` **is ignored**: vendor `b200_impl.cpp` overwrites it with 48 (`data_xport_args["num_recv_frames"] ="48"`), so earlier 32-vs-64 comparisons below measured noise. 48 frames × 3064 samples is ~2.6 ms of buffering at 56 MS/s, which is the source of the rare overruns that remain. Raising it needs a UHD rebuild, and must stay below 64 (`libpcie` has 64 slots per channel and calls `exit(1)` when all are busy).
+
+### Measured (x86_64, fix applied)
+
+Host: UGREEN DXP2800 (Intel N100, 4 cores), Ubuntu 24.04, kernel 7.0, IOMMU on, card at PCIe 5 GT/s x2, CPU governor `performance`. `benchmark_rate`, `recv_frame_size=12272`, master clock = sample rate.
+
+| Config | Duration | Drops / overruns | Seq errors |
+|---|---|---|---|
+| 1 ch 20 MS/s | 30 s | 0 / 0 | 0 |
+| 1 ch 40 MS/s | 30 s | 0 / 0 | 0 |
+| 1 ch 56 MS/s | 7 runs, 30–60 s | 6 runs 0 / 0; 1 run 2 overruns | 0 |
+| 2 ch 16 / 25 / 30.72 MS/s | 30 s each | 0 / 0 | 0 |
+| 2 ch 30.72 MS/s | 120 s | 1 overrun | 0 |
+
+Before the fix, the same host stalled within 2–7 s at 20 MS/s every time. `benchmark_rate` at 56 MS/s uses ~31% of one core.
+
+SDR++ itself is the limit well below 56 MS/s on a small CPU: its DSP chain overflows even though the transport is clean.
+
+---
+
+# Raspberry Pi 5 investigation (before the libpcie fix)
+
+How the highest **usable** RX rate was found on the reference Pi host (Pi 5 + 52Pi EP-0180 + NVMe root + community `mymodule` + vendor UHD 4.8), **before** the `libpcie` fix above. The ceilings below describe the unpatched library.
+
+The AD9361 will clock any of 32 / 40 / 44 / 48 / 50 / 56 / 61.44 MHz. That is not the limit.
+
+**Unpatched sustained ceiling (SDR++ and long UHD runs): 20 MS/s.**  
+**16 MS/s was the rock-solid daily rate.** 24+ died in a few seconds. 32–44 MS/s could look lossless for a **4 s** `benchmark_rate` and then fall over.
 
 ---
 
@@ -130,9 +185,9 @@ This repo’s `pcie-driver/mymodule.c` carves a 16 MiB pool at **`0x40000000`** 
 
 This is the largest single gain. Default 3088-byte frames are ~20k frames/s at 16 MS/s and collapse. Ettus-sized 8 KiB frames are what made **16 MS/s last**.
 
-### 5. `num_recv_frames=64`
+### 5. ~~`num_recv_frames=64`~~ (has no effect)
 
-32 buffers are enough for short 16–32 MS/s bursts. **64 buffers** are what 16–20 MS/s need to last. 128 buffers assert. Stay at 64.
+Vendor `b200_impl.cpp` forces `num_recv_frames` to 48 whatever you pass, so this argument does nothing. The 32-vs-64 differences in the tables were run-to-run variation.
 
 ### 6. Analog RX bandwidth = sample rate
 
@@ -182,16 +237,17 @@ Source name in the UI is **USRP**. Use **16 or 20 MHz**. Fully quit after instal
 
 ---
 
-## What only HamGeek can fix (50–61.44 MS/s)
+## What only HamGeek can fix
 
-These are not community-tunable. See [VENDOR-FEEDBACK.md](../VENDOR-FEEDBACK.md).
+See [VENDOR-FEEDBACK.md](../VENDOR-FEEDBACK.md).
 
-- Default `recv_frame_size` 3088 → Ettus 8176 (or drop USB framing).
-- Open `libpcie` (or ship a `.so`) so C2H can use large DMA buffers instead of USB packets and `wait_for_ack`.
+- Merge the `do_cb` count fix into `libpcie` (the community binary patch works around it).
+- Default `recv_frame_size` 3088 → 12272 (or drop USB framing).
+- Honour `num_recv_frames` instead of forcing 48.
 - `mmap` with `PAGE_SIZE`, not hardcoded 4 KiB.
 - Safe `rmmod` after RX.
 - Unique PCI ID (not stock XDMA `10ee:7022`).
 - FPGA x2 on a carrier that actually has two lanes to the card (this HAT will not).
 - Gen3: FPGA max_link_speed is 5 GT/s; a bitstream change would be required.
 
-Until then, treat **20 MS/s** as the Pi 5 + EP-0180 **SDR++** number and **16 MS/s** as the conservative daily rate. 32–44 MS/s 4-second UHD bursts are not a product claim.
+Without the `libpcie` fix, **20 MS/s** was the Pi 5 + EP-0180 **SDR++** number and **16 MS/s** the conservative daily rate. With the fix, re-test on the Pi: the x86_64 results above are the only verified ones so far.

@@ -1,5 +1,5 @@
 diff --git a/source_modules/usrp_source/src/main.cpp b/source_modules/usrp_source/src/main.cpp
-index 650fc20..8a8d92e 100644
+index 650fc20..dcd8275 100644
 --- a/source_modules/usrp_source/src/main.cpp
 +++ b/source_modules/usrp_source/src/main.cpp
 @@ -12,6 +12,10 @@
@@ -254,7 +254,7 @@ index 650fc20..8a8d92e 100644
      }
  
      static void stop(void* ctx) {
-@@ -293,19 +375,30 @@ private:
+@@ -293,20 +375,42 @@ private:
          _this->running = false;
          
          _this->stream.stopWriter();
@@ -282,14 +282,27 @@ index 650fc20..8a8d92e 100644
      static void tune(double freq, void* ctx) {
          USRPSourceModule* _this = (USRPSourceModule*)ctx;
 -        if (_this->running) {
+-            _this->dev->set_rx_freq(freq, _this->chanId);
 +        // First select often sends 0 Hz; applying that to the FPGA is useless
 +        // and has raced with vendor libpcie teardown.
 +        if (freq <= 0) { return; }
 +        if (_this->running && _this->dev) {
-             _this->dev->set_rx_freq(freq, _this->chanId);
++            // UHD checks AD9361 PLL lock once, 2 ms after tuning, and throws
++            // "RX PLL NOT LOCKED" if it isn't yet. Uncaught, that kills SDR++
++            // when the frequency is stepped quickly. Retune instead.
++            for (int attempt = 1; attempt <= 3; attempt++) {
++                try {
++                    _this->dev->set_rx_freq(freq, _this->chanId);
++                    break;
++                }
++                catch (const std::exception& e) {
++                    flog::warn("USRPSourceModule '{0}': Tune to {1} failed (attempt {2}/3): {3}", _this->name, freq, attempt, e.what());
++                }
++            }
          }
          _this->freq = freq;
-@@ -423,6 +516,18 @@ private:
+         flog::info("USRPSourceModule '{0}': Tune: {1}!", _this->name, freq);
+@@ -423,6 +527,18 @@ private:
          }
      }
  
@@ -308,7 +321,7 @@ index 650fc20..8a8d92e 100644
      uint32_t floor2(uint32_t val) {
          val |= val >> 1;
          val |= val >> 2;
-@@ -432,27 +537,58 @@ private:
+@@ -432,27 +548,58 @@ private:
          return val - (val >> 1);
      }
  
@@ -378,7 +391,7 @@ index 650fc20..8a8d92e 100644
      }
  
      std::string name;
-@@ -461,7 +597,7 @@ private:
+@@ -461,7 +608,7 @@ private:
      double sampleRate;
      SourceManager::SourceHandler handler;
      bool running = false;
@@ -387,7 +400,7 @@ index 650fc20..8a8d92e 100644
      int devId = 0;
      int chanId = 0;
      int srId = 0;
-@@ -486,6 +622,7 @@ private:
+@@ -486,6 +633,7 @@ private:
      bool firstSelect = true;
  
      std::thread workerThread;

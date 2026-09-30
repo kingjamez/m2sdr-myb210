@@ -48,4 +48,4 @@ export LD_LIBRARY_PATH=/opt/m2sdr-uhd/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
 GNU Radio / Gqrx / SDR++ must be built against the same `libuhd.so`.
 
-For high sample rates, pass `recv_frame_size=8176,num_recv_frames=64`. HamGeek’s 3088-byte default dies at 16 MS/s even on a dedicated slot. Pi 5 sustained ceiling is **20 MS/s** (16 MS/s conservative): [sample-rate.md](sample-rate.md).
+For high sample rates, pass `recv_frame_size=12272` (or set it in `/etc/uhd/uhd.conf`) and install UHD with `scripts/install-uhd.sh`, which patches the `libpcie` completion bug. An x86_64 host then streams 56 MS/s on one channel: [sample-rate.md](sample-rate.md).

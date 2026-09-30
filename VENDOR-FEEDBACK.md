@@ -9,6 +9,8 @@ This is engineering feedback from a working install. Discovery worked quickly. S
 
 Please treat this as a punch list for the next zip you ship to customers.
 
+> **Update 2026-09-30 — the rate ceiling below is a `libpcie` bug, now found.** `do_cb` masks the pending-completion count (BAR0 `0x1c`) with `0x3f`. A backlog of 64 or more completions is misread, the completion FIFO is never drained, all DMA descriptors are consumed, and RX data plus control replies stop (`ERROR_CODE_TIMEOUT`, then `wait_for_ack`). Widening the mask (community workaround: `scripts/patch-libpcie.py`, `0x1ff`) lets an x86_64 host stream 56 MS/s on one channel and 30.72 MS/s on two. Please fix this in the `libpcie` source, let `num_recv_frames` be overridden instead of forcing 48, and default `recv_frame_size` to 12272. Details: [docs/sample-rate.md](docs/sample-rate.md).
+
 ---
 
 ## Reference setup (what actually streamed)
