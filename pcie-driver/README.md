@@ -1,6 +1,6 @@
 # mymodule (FPGA_PCIE)
 
-Out-of-tree Linux driver for the HamGeek M2SDR. DKMS package version **0.26** (community).
+Out-of-tree Linux driver for the HamGeek M2SDR. DKMS package version **0.27** (community).
 
 - PCI IDs: `10ee:7012`, `10ee:7021` (x1), `10ee:7022` (x2), `10ee:7024` (x4)
 - Character device: `/dev/FPGA`

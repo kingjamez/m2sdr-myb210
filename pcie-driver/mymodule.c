@@ -109,6 +109,10 @@ struct az_dev {
 };
 
 static wait_queue_head_t waitqueue;
+
+static unsigned int poll_ms = 2;
+module_param(poll_ms, uint, 0644);
+MODULE_PARM_DESC(poll_ms, "Max ms libpcie waits for an MSI before re-polling the completion count");
 static atomic_t   poll_cond, rd_cond ;
 
 
@@ -570,18 +574,24 @@ int idx = * offs ;
     if ( count  == 0  && user_buffer==NULL  ) 
 	
 	{ 
-     r = atomic_read(&rd_cond) ; 
-	 if (r <=0 ) {		 
-		 t = wait_event_interruptible_timeout(waitqueue, atomic_read(&rd_cond) >=1 , HZ/2 );
-		 if (t==0) return 0;//time out 
-	 }
-	 atomic_dec(&rd_cond) ; 
+     /* libpcie's do_cb drains every pending completion per wakeup, so consume
+	    all queued IRQ notifications at once. On timeout return 1 anyway so
+	    do_cb re-reads the pending count (BAR0 0x1c): r25 returned 0 here and
+	    a missed MSI left completions stranded until the next one. */
+	 if (atomic_read(&rd_cond) <= 0)
+		 wait_event_interruptible_timeout(waitqueue, atomic_read(&rd_cond) >= 1,
+						  msecs_to_jiffies(poll_ms));
+	 atomic_set(&rd_cond, 0);
      return  1   ;
     }else {
+	if (idx < 0 || idx >= MAX_BUFS || !d->dma_bufs[idx].drv_addr ||
+	    count > (size_t)d->dma_bufs[idx].len * 8)
+		return -EINVAL;
 	if (d->dma_bufs[idx].drv_addr && !d->dma_bufs[idx].coherent)
 		dma_sync_single_for_cpu(&d->pdev->dev, d->dma_bufs[idx].phys << 3,
 					d->dma_bufs[idx].len * 8, DMA_FROM_DEVICE);
-	copy_to_user ( user_buffer ,   d->dma_bufs[idx].drv_addr ,to_copy_in_bytes  ) ; 
+	if (copy_to_user ( user_buffer ,   d->dma_bufs[idx].drv_addr ,to_copy_in_bytes  ))
+		return -EFAULT;
  
 }
 	 return  2  ;
@@ -593,7 +603,11 @@ static ssize_t az_write(struct file *File, const char *user_buffer, size_t count
 int to_copy_in_bytes = count;
 char *p8 ;  
 int idx = * offs ;
-copy_from_user (  d->dma_bufs[idx].drv_addr , user_buffer , to_copy_in_bytes  ) ;
+if (idx < 0 || idx >= MAX_BUFS || !d->dma_bufs[idx].drv_addr ||
+    count > (size_t)d->dma_bufs[idx].len * 8)
+	return -EINVAL;
+if (copy_from_user (  d->dma_bufs[idx].drv_addr , user_buffer , to_copy_in_bytes  ))
+	return -EFAULT;
 if (d->dma_bufs[idx].drv_addr && !d->dma_bufs[idx].coherent)
 	dma_sync_single_for_device(&d->pdev->dev, d->dma_bufs[idx].phys << 3,
 				   d->dma_bufs[idx].len * 8, DMA_TO_DEVICE);
@@ -964,12 +978,12 @@ err_disable_pdev:
 */
 static void az_remove(struct pci_dev *pdev)
 {
-//	    printk(KERN_INFO PFX "az_remove 1\n" );
-	free_node(d);
-//	printk(KERN_INFO PFX "az_remove 2\n");
+    /* Stop DMA and the IRQ before freeing buffers the FPGA may still hold
+       descriptors for. */
+    pci_clear_master(pdev);
     free_irq(pdev->irq,pdev);
-//	printk(KERN_INFO PFX "az_remove 3\n");
     pci_disable_msi(pdev);
+	free_node(d);
 //	printk(KERN_INFO PFX "az_remove 4\n");
  
 

@@ -24,3 +24,15 @@ Verified: `rx_samples_to_file` `rx_exit=0`, 80000-byte IQ file, HDMI up, NVMe ro
 **Not done in this module (needs vendor `libpcie.a`):** `mmap` lengths/offsets still assume 4 KiB. Host `PAGE_SIZE` must be 4096. USB-style `recv_frame_size` (default 3088 bytes) is also in `libpcie`/UHD, not this module. Community workaround: pass `recv_frame_size=8176,num_recv_frames=64` — sustained through **20 MS/s** on this Pi (16 MS/s conservative). See [docs/sample-rate.md](../docs/sample-rate.md).
 
 Do **not** use `cma=64M@1024M` as an alternative. It can place buffers at 1 GiB (RX works) and starves `vc4`, so HDMI dies.
+
+## Completion-wait and teardown fixes (0.27, 2026-09-30)
+
+Found while tracing the "dies above 20 MS/s" problem on an x86_64 host (Intel N100, IOMMU on). The main fix for that problem is in the closed `libpcie` (see `scripts/patch-libpcie.py` and [docs/sample-rate.md](../docs/sample-rate.md)); these are the driver-side parts.
+
+| Change | Why |
+|---|---|
+| `az_read(NULL, 0)` returns 1 after a short timeout (`poll_ms`, default 2 ms) instead of 0 after 500 ms, and clears `rd_cond` once per wakeup | `libpcie`'s `do_cb` only re-reads the pending count (BAR0 `0x1c`) when this returns non-zero. A missed MSI left completions stranded. |
+| `az_remove`: `pci_clear_master`, `free_irq`, `pci_disable_msi` **before** `free_node` | Stop the FPGA writing into buffers while they are freed. |
+| Bounds checks on `idx` and `count` in `az_read` / `az_write`; check `copy_*_user` | Out-of-range offsets read or wrote kernel memory. |
+
+Compile-tested on x86_64 (kernel 7.0). The same three changes ran for the x86_64 streaming tests in a driver built from r25 + `dma-fixes.patch`. Not yet run on a Pi 5.

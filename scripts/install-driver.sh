@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/pcie-driver"
-VER=0.26
+VER=0.27
 
 if [[ ! -d /lib/modules/$(uname -r)/build ]]; then
   echo "No kernel build dir for $(uname -r)." >&2

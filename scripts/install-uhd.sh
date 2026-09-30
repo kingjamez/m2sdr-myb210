@@ -32,6 +32,11 @@ if [[ -z "$HOST" || ! -f "$HOST/CMakeLists.txt" ]]; then
   exit 1
 fi
 
+# Fix the vendor libpcie completion-count bug (do_cb masks the pending count
+# with 0x3f; a backlog of 64+ deadlocks RX and the control path). The vendor
+# zip is left untouched; only the unpacked copy is patched.
+python3 "$ROOT/scripts/patch-libpcie.py" "$HOST"/lib/usrp/b200/*_libpcie.a
+
 mkdir -p "$HOST/build"
 cd "$HOST/build"
 cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PREFIX"
