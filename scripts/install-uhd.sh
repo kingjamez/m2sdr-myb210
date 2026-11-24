@@ -37,6 +37,11 @@ fi
 # zip is left untouched; only the unpacked copy is patched.
 python3 "$ROOT/scripts/patch-libpcie.py" "$HOST"/lib/usrp/b200/*_libpcie.a
 
+# libpcie counts TX DMA transfers in 64-bit words. Pad the data OUT
+# transfer before handing it to libpcie so it cannot truncate the CHDR tail.
+patch --directory="$HOST" --strip=1 --batch --forward --fuzz=0 \
+  --input="$ROOT/patches/uhd-tx-dma-alignment.patch"
+
 mkdir -p "$HOST/build"
 cd "$HOST/build"
 cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PREFIX"

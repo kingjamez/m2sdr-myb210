@@ -1,0 +1,65 @@
+--- a/lib/transport/libusb1_zero_copy.cpp
++++ b/lib/transport/libusb1_zero_copy.cpp
+@@ -16,6 +16,7 @@
+ #include <boost/format.hpp>
+ #include <boost/thread/condition_variable.hpp>
+ #include <boost/thread/mutex.hpp>
++#include <cstring>
+ #include <functional>
+ #include <list>
+ #include <memory>
+@@ -154,7 +155,21 @@
+     UHD_INLINE void submit(void)
+     {
+ 
+-        _lut->length = int((_is_recv) ? _frame_size : size()); // always set length
++        size_t transfer_bytes = _is_recv ? _frame_size : size();
++        // On MyB210 the vendor PCIe backend divides the transfer byte count
++        // by eight before both the DMA-buffer copy and descriptor submission.
++        // Pad B200 data OUT (endpoint 2), leaving the CHDR length untouched.
++        constexpr size_t dma_word_bytes = 8;
++        constexpr unsigned char b200_data_out = 2;
++        if (!_is_recv && _lut->endpoint == b200_data_out &&
++            transfer_bytes % dma_word_bytes != 0) {
++            const size_t padding = dma_word_bytes - transfer_bytes % dma_word_bytes;
++            UHD_ASSERT_THROW(transfer_bytes <= _frame_size);
++            UHD_ASSERT_THROW(padding <= _frame_size - transfer_bytes);
++            std::memset(_lut->buffer + transfer_bytes, 0, padding);
++            transfer_bytes += padding;
++        }
++        _lut->length = static_cast<int>(transfer_bytes);
+  
+         
+ 
+@@ -173,29 +188,11 @@
+ 
+ 
+ 
+-    UHD_INLINE void pcie_submit (void)
++    UHD_INLINE void pcie_submit(void)
+     {
+-
+-        _lut->length = int((_is_recv) ? _frame_size : size()); // always set length
+- 
+-        
+-
+-#ifdef UHD_TXRX_DEBUG_PRINTS
+-        result.start_time = boost::get_system_time().time_of_day().total_microseconds();
+-        result.buff_num   = num();
+-        result.is_recv    = _is_recv;
+-#endif 
+- 
+-        int ret = func_xxxX(_lut); // liwei ;;;
+- 
+-        if (ret != LIBUSB_SUCCESS)
+-            throw uhd::usb_error(ret,
+-                str(boost::format("PCIE usb %s submit failed: %s") % _name % libusb_error_name(ret)));
++        submit();
+     }
+ 
+-
+-
+-
+     template <typename buffer_type>
+     UHD_INLINE typename buffer_type::sptr get_new(const double timeout)
+     {
