@@ -8,7 +8,7 @@ Unofficial. Not affiliated with Ettus/NI or HamGeek. Vendor contact on the after
 
 **Full rate works (2026-09-30).** The old "20 MS/s ceiling" was a completion-count bug in the vendor's closed `libpcie`; `install-uhd.sh` now patches it. On an x86_64 host (Intel N100) the card streams **56 MS/s on one channel** and **30.72 MS/s on both channels** in `benchmark_rate` with `recv_frame_size=12272`. The Raspberry Pi 5 streamed at 16–20 MS/s before the fix and has not been re-tested since. Details: [docs/sample-rate.md](docs/sample-rate.md).
 
-**Already have it installed?** Apply the fix without rebuilding UHD: **[docs/upgrading.md](docs/upgrading.md)**.
+**Already have it installed?** Apply the completion-count fix without rebuilding UHD: **[docs/upgrading.md](docs/upgrading.md)**. The TX DMA alignment fix for short packets is applied when rebuilding with `scripts/install-uhd.sh`.
 
 ---
 
@@ -218,6 +218,7 @@ Do **not** put `cma=64M@1024M` on the cmdline. That moves all CMA to 1 GiB, stre
 | SDR++ aborts when USRP is selected | Local `multi_usrp` destroyed while `libpcie` C2H callbacks run | Apply `patches/sdrpp-usrp-source-myb210.patch` |
 | Waterfall 50 dB bowl, extra spurs | Analog RX BW left at AD9361 200 kHz min | Same patch: set analog BW = sample rate; enable DC/IQ auto |
 | Stream stops after seconds at ≥20 MS/s (`ERROR_CODE_TIMEOUT`, then `wait_for_ack`) | `libpcie` `do_cb` masks the pending-completion count with `0x3f`; a backlog of 64 deadlocks RX and control | `scripts/patch-libpcie.py` (run by `install-uhd.sh`) + driver 0.27 |
+| TX sequence errors after a one-sample EOB | `libpcie` rounds the byte count down to a whole 64-bit DMA word and drops the last 4 bytes of an unaligned CHDR packet | Rebuild with `scripts/install-uhd.sh` to apply the [TX DMA alignment patch](patches/uhd-tx-dma-alignment.patch) |
 | Overflows at high rates | Default `recv_frame_size` **3088** (one IRQ per 768 samples) | `recv_frame_size=12272` |
 | Sequence errors / `BAD_PACKET` | `recv_frame_size=16360` | Stay at **12272** or below |
 | Rare single overruns at 56 MS/s | Only 48 RX frames (~2.6 ms), forced by vendor `b200_impl.cpp` | Ignore, or rebuild UHD with ~60 |

@@ -3,7 +3,7 @@ set -euo pipefail
 sudo apt-get update
 sudo apt-get install -y \
   build-essential dkms "linux-headers-$(uname -r)" \
-  cmake pkg-config git unzip \
+  cmake pkg-config git patch unzip \
   libboost-all-dev libusb-1.0-0-dev libudev-dev \
   python3-dev python3-mako python3-numpy python3-requests python3-setuptools \
   python3-ruamel.yaml || {

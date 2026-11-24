@@ -1,5 +1,11 @@
 # Patches
 
+## `uhd-tx-dma-alignment.patch`
+
+`scripts/install-uhd.sh` applies this patch to the unpacked vendor UHD 4.3–4.8 source before building. It pads the TX data OUT transfer to a multiple of 8 bytes before calling `libpcie`, preserving the CHDR length. This fixes truncated payloads on transfers whose length is a multiple of 4 bytes but not of 8, including one-sample EOB packets.
+
+On an aarch64 Jetson with MyB210 and vendor UHD 4.8, a 16-packet TX sequence produced 12 EOB acknowledgements and 2 sequence errors before the fix. The rebuilt UHD produced 16 acknowledgements and zero sequence errors with the same sequence.
+
 ## `sdrpp-usrp-source-myb210.patch`
 
 Against SDR++ 1.3 / current `master` `source_modules/usrp_source/src/main.cpp`.

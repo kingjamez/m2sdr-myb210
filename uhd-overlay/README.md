@@ -2,6 +2,8 @@
 
 These files are the HamGeek glue on top of Ettus UHD 4.8. Prefer unpacking `vendor/uhd-4.8.0.0.zip` and building that tree. This directory exists so you can see exactly what is not stock Ettus.
 
+The overlay preserves the vendor sources. The installer applies the [TX DMA alignment patch](../patches/uhd-tx-dma-alignment.patch) to the unpacked source before building.
+
 | File | Why it is here |
 |---|---|
 | `host/lib/usrp/b200/CMakeLists.txt` | Links `x64_libpcie.a` or `arm_libpcie.a` plus pthread |
